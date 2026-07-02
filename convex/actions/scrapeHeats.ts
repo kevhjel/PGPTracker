@@ -16,6 +16,9 @@ const BACKFILL_RESCHEDULE_MS = 2 * 1000;
 const EMPTY_RECHECK_RESCHEDULE_MS = 30 * 60 * 1000;
 const EMPTY_RECHECK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const EMPTY_RECHECK_BATCH_SIZE = 100;
+const MISS_RECHECK_RESCHEDULE_MS = 15 * 60 * 1000;
+const MISS_RECHECK_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const MISS_RECHECK_BATCH_SIZE = 200;
 
 // A batch can take longer than expected under network/retry pressure; give
 // it a generous margin before another caller is allowed to treat it as dead.
@@ -23,6 +26,8 @@ const SCRAPE_CHAIN_KEY = "scrapeBatchChain";
 const SCRAPE_CHAIN_STALE_MS = 3 * 60 * 1000;
 const EMPTY_RECHECK_CHAIN_KEY = "recheckEmptyHeatsChain";
 const EMPTY_RECHECK_CHAIN_STALE_MS = 10 * 60 * 1000;
+const MISS_RECHECK_CHAIN_KEY = "recheckMissedHeatsChain";
+const MISS_RECHECK_CHAIN_STALE_MS = 10 * 60 * 1000;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -47,7 +52,11 @@ async function scrapeAndStoreHeat(ctx: ActionCtx, heatNo: number): Promise<Scrap
   }
 
   if (res.status >= 300 && res.status < 400) {
-    return "invalid"; // ServerError.html redirect - heat number not allocated yet
+    // ServerError.html redirect - not allocated *yet*. ClubSpeed appears to
+    // pre-reserve heat numbers before their results page goes live, so this
+    // isn't necessarily permanent; track it for recheckMissedHeats to retry.
+    await ctx.runMutation(internal.heats.recordMiss, { heatNo });
+    return "invalid";
   }
   if (!res.ok) {
     await ctx.runMutation(internal.heats.logScrapeError, {
@@ -118,6 +127,7 @@ async function scrapeAndStoreHeat(ctx: ActionCtx, heatNo: number): Promise<Scrap
       winnerRaw: payload.winnerRaw,
       entries,
     });
+    await ctx.runMutation(internal.heats.clearMiss, { heatNo });
 
     return isEmpty ? "empty" : "scraped";
   } catch (err) {
@@ -253,6 +263,59 @@ export const recheckEmptyHeats = internalAction({
     }
 
     await ctx.scheduler.runAfter(EMPTY_RECHECK_RESCHEDULE_MS, internal.actions.scrapeHeats.recheckEmptyHeats, {
+      chainToken: myToken,
+    });
+  },
+});
+
+/**
+ * Separate self-rescheduling loop that retries heat numbers previously seen
+ * as "not allocated yet" (see recordMiss in convex/heats.ts). scrapeBatch's
+ * live-edge catch-up abandons a heat number forever once it's scanned past
+ * it, but ClubSpeed pre-reserves numbers before their results page actually
+ * goes live - so a miss isn't permanent. This loop gives those numbers a
+ * chance to resolve without re-walking the whole cursor. Misses older than
+ * MISS_RECHECK_MAX_AGE_MS are assumed genuinely abandoned and dropped.
+ * Same owner-token guard as the other chains.
+ */
+export const recheckMissedHeats = internalAction({
+  args: { chainToken: v.optional(v.string()) },
+  handler: async (ctx, { chainToken }) => {
+    const enabled = await ctx.runQuery(internal.appSettings.getInternal, { key: "scrapingEnabled" });
+    if (enabled === false) return;
+
+    let myToken = chainToken;
+    if (myToken) {
+      const stillOwner = await ctx.runMutation(internal.appSettings.heartbeatIfOwner, {
+        key: MISS_RECHECK_CHAIN_KEY,
+        token: myToken,
+      });
+      if (!stillOwner) return;
+    } else {
+      myToken = crypto.randomUUID();
+      const claimed = await ctx.runMutation(internal.appSettings.claimChainIfIdle, {
+        key: MISS_RECHECK_CHAIN_KEY,
+        newToken: myToken,
+        staleAfterMs: MISS_RECHECK_CHAIN_STALE_MS,
+      });
+      if (!claimed) return;
+    }
+
+    const misses = await ctx.runQuery(internal.heats.listMissesForRecheck, {
+      limit: MISS_RECHECK_BATCH_SIZE,
+    });
+
+    const cutoff = Date.now() - MISS_RECHECK_MAX_AGE_MS;
+    for (const miss of misses) {
+      if (miss.firstMissedAt < cutoff) {
+        await ctx.runMutation(internal.heats.clearMiss, { heatNo: miss.heatNo });
+        continue;
+      }
+      await scrapeAndStoreHeat(ctx, miss.heatNo);
+      await sleep(REQUEST_DELAY_MS);
+    }
+
+    await ctx.scheduler.runAfter(MISS_RECHECK_RESCHEDULE_MS, internal.actions.scrapeHeats.recheckMissedHeats, {
       chainToken: myToken,
     });
   },

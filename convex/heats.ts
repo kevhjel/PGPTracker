@@ -4,6 +4,7 @@ import { query, internalQuery, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { recomputeDriverAggregates } from "./drivers";
+import { correctTrackLocalTimestamp } from "./lib/clubspeedParser";
 
 const heatCategoryValidator = v.union(
   v.literal("arrive_and_drive"),
@@ -52,6 +53,45 @@ export const listEmptyForRecheck = internalQuery({
       .withIndex("by_status", (q) => q.eq("status", "empty"))
       .collect();
     return heats.filter((h) => h.raceDateTime >= cutoff).slice(0, limit);
+  },
+});
+
+/** Records that `heatNo` came back "not allocated yet" so it can be retried
+ * later - ClubSpeed appears to pre-reserve heat numbers before their results
+ * page actually goes live, so a miss during the live-edge catch-up loop
+ * doesn't mean the number will never be used. */
+export const recordMiss = internalMutation({
+  args: { heatNo: v.number() },
+  handler: async (ctx, { heatNo }) => {
+    const existing = await ctx.db
+      .query("heatMisses")
+      .withIndex("by_heatNo", (q) => q.eq("heatNo", heatNo))
+      .unique();
+    const now = Date.now();
+    if (existing) {
+      await ctx.db.patch(existing._id, { lastCheckedAt: now });
+    } else {
+      await ctx.db.insert("heatMisses", { heatNo, firstMissedAt: now, lastCheckedAt: now });
+    }
+  },
+});
+
+/** Clears a heat's miss record once it's been successfully scraped (or found empty). */
+export const clearMiss = internalMutation({
+  args: { heatNo: v.number() },
+  handler: async (ctx, { heatNo }) => {
+    const existing = await ctx.db
+      .query("heatMisses")
+      .withIndex("by_heatNo", (q) => q.eq("heatNo", heatNo))
+      .unique();
+    if (existing) await ctx.db.delete(existing._id);
+  },
+});
+
+export const listMissesForRecheck = internalQuery({
+  args: { limit: v.number() },
+  handler: async (ctx, { limit }) => {
+    return await ctx.db.query("heatMisses").withIndex("by_heatNo").order("asc").take(limit);
   },
 });
 
@@ -479,5 +519,56 @@ export const finalizeStatsAfterPurge = internalMutation({
       maxHeatDate: latest?.raceDateTime,
       updatedAt: Date.now(),
     });
+  },
+});
+
+const TIMEZONE_FIX_DONE_KEY = "heatTimezonesFixedAt";
+
+/** One-time correction for raceDateTime values computed before the Pacific
+ * timezone parsing fix (see convex/lib/clubspeedParser.ts). Call repeatedly
+ * with the previous response's `nextHeatNo` until `hasMore` is false, then
+ * run `finalizeStatsAfterPurge` to fix appStats.min/maxHeatDate.
+ *
+ * This correction is NOT idempotent - applying it twice would double-shift
+ * timestamps, including ones already fixed or freshly (correctly) scraped.
+ * It locks itself out via appSettings once a batch reports hasMore: false. */
+export const fixHeatTimezonesBatch = internalMutation({
+  args: { afterHeatNo: v.optional(v.number()), batchSize: v.number() },
+  handler: async (ctx, { afterHeatNo, batchSize }) => {
+    const alreadyDone = await ctx.db
+      .query("appSettings")
+      .withIndex("by_key", (q) => q.eq("key", TIMEZONE_FIX_DONE_KEY))
+      .unique();
+    if (alreadyDone) {
+      return { nextHeatNo: afterHeatNo, hasMore: false, patchedCount: 0, skipped: "already run" };
+    }
+
+    const heats = await ctx.db
+      .query("heats")
+      .withIndex("by_heatNo", (q) =>
+        afterHeatNo === undefined ? q : q.gt("heatNo", afterHeatNo),
+      )
+      .order("asc")
+      .take(batchSize);
+
+    let patchedCount = 0;
+    for (const heat of heats) {
+      const corrected = correctTrackLocalTimestamp(heat.raceDateTime);
+      if (corrected !== heat.raceDateTime) {
+        await ctx.db.patch(heat._id, { raceDateTime: corrected });
+        patchedCount++;
+      }
+    }
+
+    const hasMore = heats.length === batchSize;
+    if (!hasMore) {
+      await ctx.db.insert("appSettings", { key: TIMEZONE_FIX_DONE_KEY, value: Date.now() });
+    }
+
+    return {
+      nextHeatNo: heats.length > 0 ? heats[heats.length - 1].heatNo : afterHeatNo,
+      hasMore,
+      patchedCount,
+    };
   },
 });

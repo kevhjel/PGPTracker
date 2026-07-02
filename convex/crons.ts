@@ -13,5 +13,11 @@ crons.interval(
   internal.actions.scrapeHeats.recheckEmptyHeats,
   {},
 );
+crons.interval(
+  "recheck missed heats watchdog",
+  { hours: 1 },
+  internal.actions.scrapeHeats.recheckMissedHeats,
+  {},
+);
 
 export default crons;

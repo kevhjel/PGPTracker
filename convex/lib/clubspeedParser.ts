@@ -2,6 +2,64 @@ import * as cheerio from "cheerio";
 
 export const CLUBSPEED_BASE = "https://pgpkent.clubspeedtiming.com/sp_center";
 
+// ClubSpeed's #lblDate has no timezone info and reflects the track's local
+// wall-clock time (Kent, WA - America/Los_Angeles). `new Date(dateText)`
+// would parse it as the server process's local time (UTC on Convex), which
+// silently mislabels every timestamp by the Pacific UTC offset. These
+// helpers convert a Pacific wall-clock time to the correct UTC instant,
+// using the standard US DST rule (2nd Sunday of March - 1st Sunday of
+// November) since Convex's runtime doesn't reliably support IANA timezone
+// data via Intl.
+function nthSundayOfMonth(year: number, month: number, n: number): number {
+  const firstOfMonthDow = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
+  const firstSunday = 1 + ((7 - firstOfMonthDow) % 7);
+  return firstSunday + (n - 1) * 7;
+}
+
+function isPacificDst(year: number, month: number, day: number): boolean {
+  if (month < 3 || month > 11) return false;
+  if (month > 3 && month < 11) return true;
+  if (month === 3) return day >= nthSundayOfMonth(year, 3, 2);
+  return day < nthSundayOfMonth(year, 11, 1); // month === 11
+}
+
+function pacificOffsetMinutes(year: number, month: number, day: number): number {
+  return isPacificDst(year, month, day) ? -420 : -480; // PDT: UTC-7, PST: UTC-8
+}
+
+function trackLocalToUtcMs(year: number, month: number, day: number, hour: number, minute: number): number {
+  const naiveUtcMs = Date.UTC(year, month - 1, day, hour, minute);
+  return naiveUtcMs - pacificOffsetMinutes(year, month, day) * 60_000;
+}
+
+/** Reinterprets a timestamp that was previously (incorrectly) computed by
+ * treating the track's Pacific wall-clock time as UTC, recovering the
+ * correct UTC instant. Used both for parsing fresh pages and for
+ * one-time correction of already-stored timestamps. */
+export function correctTrackLocalTimestamp(mislabeledUtcMs: number): number {
+  const d = new Date(mislabeledUtcMs);
+  return trackLocalToUtcMs(
+    d.getUTCFullYear(),
+    d.getUTCMonth() + 1,
+    d.getUTCDate(),
+    d.getUTCHours(),
+    d.getUTCMinutes(),
+  );
+}
+
+function parseTrackLocalDateTime(dateText: string): number {
+  const match = dateText.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+  if (!match) return Date.now();
+  const [, moStr, dayStr, yearStr, hourStr, minStr, ampm] = match;
+  const month = parseInt(moStr, 10);
+  const day = parseInt(dayStr, 10);
+  const year = parseInt(yearStr, 10);
+  let hour = parseInt(hourStr, 10) % 12;
+  if (/pm/i.test(ampm)) hour += 12;
+  const minute = parseInt(minStr, 10);
+  return trackLocalToUtcMs(year, month, day, hour, minute);
+}
+
 export interface ParsedResultRow {
   position: number;
   name: string;
@@ -64,7 +122,7 @@ export function parseHeatDetailsHtml(html: string): ParsedHeatDetails {
 
   const rawHeatType = $("#lblRaceType").text().trim();
   const dateText = $("#lblDate").text().trim();
-  const raceDateTime = dateText ? new Date(dateText).getTime() : Date.now();
+  const raceDateTime = dateText ? parseTrackLocalDateTime(dateText) : Date.now();
   const winnerRaw = $("#lblWinner").text().trim();
 
   const results: ParsedResultRow[] = [];

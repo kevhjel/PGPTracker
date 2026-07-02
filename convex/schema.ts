@@ -93,6 +93,12 @@ export default defineSchema({
     .index("by_heatNo", ["heatNo"])
     .index("by_attemptedAt", ["attemptedAt"]),
 
+  heatMisses: defineTable({
+    heatNo: v.number(),
+    firstMissedAt: v.number(),
+    lastCheckedAt: v.number(),
+  }).index("by_heatNo", ["heatNo"]),
+
   appSettings: defineTable({
     key: v.string(),
     value: v.any(),
