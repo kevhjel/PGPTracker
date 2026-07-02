@@ -1,12 +1,6 @@
 export function formatLapTime(ms: number | undefined | null): string {
   if (ms === undefined || ms === null) return "–";
-  const totalSeconds = ms / 1000;
-  if (totalSeconds >= 60) {
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = (totalSeconds - minutes * 60).toFixed(3).padStart(6, "0");
-    return `${minutes}:${seconds}`;
-  }
-  return totalSeconds.toFixed(3);
+  return (ms / 1000).toFixed(3);
 }
 
 export function formatGap(ms: number | undefined | null): string {
