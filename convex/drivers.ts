@@ -30,22 +30,36 @@ export const listWatched = query({
   },
 });
 
+/**
+ * Type-ahead driver search, backed by a Convex search index (fuzzy/prefix
+ * match on displayName) rather than a full-table scan - needs to stay fast
+ * as the driver count grows into the tens of thousands, and this is a
+ * public-facing path, not just an admin tool.
+ */
 export const search = query({
   args: { text: v.string() },
   handler: async (ctx, { text }) => {
-    const needle = text.toLowerCase();
-    if (!needle) return [];
-    // Small-scale substring search over drivers; fine at this dataset size
-    // since it's an admin-only lookup tool, not a hot public path.
-    const all = await ctx.db.query("drivers").collect();
-    return all
-      .filter(
-        (d) =>
-          d.displayName.toLowerCase().includes(needle) ||
-          d.custId.includes(needle) ||
-          d.nameVariantsSeen.some((n) => n.toLowerCase().includes(needle)),
-      )
-      .slice(0, 50);
+    const trimmed = text.trim();
+    if (!trimmed) return [];
+
+    let custIdMatch: Doc<"drivers"> | null = null;
+    if (/^\d+$/.test(trimmed)) {
+      custIdMatch = await ctx.db
+        .query("drivers")
+        .withIndex("by_custId", (q) => q.eq("custId", trimmed))
+        .unique();
+    }
+
+    const nameMatches = await ctx.db
+      .query("drivers")
+      .withSearchIndex("search_displayName", (q) => q.search("displayName", trimmed))
+      .take(20);
+
+    const results = custIdMatch
+      ? [custIdMatch, ...nameMatches.filter((d) => d._id !== custIdMatch!._id)]
+      : nameMatches;
+
+    return results.filter((d) => !d.mergedIntoDriverId).slice(0, 20);
   },
 });
 

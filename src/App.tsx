@@ -4,6 +4,7 @@ import HomePage from './pages/HomePage'
 import HeatBrowserPage from './pages/HeatBrowserPage'
 import HeatDetailPage from './pages/HeatDetailPage'
 import LeaderboardPage from './pages/LeaderboardPage'
+import DriverSearchPage from './pages/DriverSearchPage'
 import DriverProfilePage from './pages/DriverProfilePage'
 import DriverAnalyticsPage from './pages/DriverAnalyticsPage'
 import WatchlistPage from './pages/WatchlistPage'
@@ -20,6 +21,7 @@ function App() {
         <Route path="/heats" element={<HeatBrowserPage />} />
         <Route path="/heats/:heatNo" element={<HeatDetailPage />} />
         <Route path="/leaderboard" element={<LeaderboardPage />} />
+        <Route path="/drivers" element={<DriverSearchPage />} />
         <Route path="/drivers/:driverId" element={<DriverProfilePage />} />
         <Route path="/drivers/:driverId/analytics" element={<DriverAnalyticsPage />} />
         <Route path="/watchlist" element={<WatchlistPage />} />

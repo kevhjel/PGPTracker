@@ -33,9 +33,38 @@ export default function AdminDriversPage() {
     }
   };
 
+  const toggleWatched = async (driverId: Id<"drivers">, name: string, nextWatched: boolean) => {
+    setMessage("");
+    try {
+      await setWatched({ driverId, isWatched: nextWatched, adminSecret: secret });
+      setMessage(`${nextWatched ? "Added" : "Removed"} ${name} ${nextWatched ? "to" : "from"} the watchlist.`);
+    } catch (err) {
+      setMessage(String(err));
+    }
+  };
+
+  const saveDisplayName = async (driverId: Id<"drivers">, newName: string) => {
+    setMessage("");
+    try {
+      await updateDisplayName({ driverId, displayName: newName, adminSecret: secret });
+    } catch (err) {
+      setMessage(String(err));
+    }
+  };
+
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold">Manage Drivers</h1>
+
+      {!secret && (
+        <p className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+          No admin secret is set yet. Every action below will fail until you save one on the{" "}
+          <a href="/admin/scrape-health" className="underline">
+            Scrape Health
+          </a>{" "}
+          page.
+        </p>
+      )}
 
       <input
         type="text"
@@ -44,6 +73,12 @@ export default function AdminDriversPage() {
         placeholder="Search by name or CustID…"
         className="w-full rounded-md border border-neutral-300 px-3 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-900"
       />
+
+      {message && (
+        <p className="rounded-lg border border-neutral-200 p-3 text-sm text-neutral-600 dark:border-neutral-800 dark:text-neutral-300">
+          {message}
+        </p>
+      )}
 
       <div className="rounded-lg border border-neutral-200 p-4 dark:border-neutral-800 space-y-2">
         <div className="text-sm font-medium">Merge driver records</div>
@@ -59,7 +94,6 @@ export default function AdminDriversPage() {
             Merge source into target
           </button>
         </div>
-        {message && <p className="text-neutral-500">{message}</p>}
       </div>
 
       <div className="overflow-x-auto rounded-lg border border-neutral-200 dark:border-neutral-800">
@@ -81,7 +115,7 @@ export default function AdminDriversPage() {
                     defaultValue={driver.displayName}
                     onBlur={(e) => {
                       if (e.target.value !== driver.displayName) {
-                        updateDisplayName({ driverId: driver._id, displayName: e.target.value, adminSecret: secret });
+                        saveDisplayName(driver._id, e.target.value);
                       }
                     }}
                     className="rounded-md border border-transparent bg-transparent px-1 hover:border-neutral-300 dark:hover:border-neutral-700"
@@ -91,7 +125,7 @@ export default function AdminDriversPage() {
                 <td className="px-3 py-2 tabular-nums">{driver.totalHeats}</td>
                 <td className="px-3 py-2">
                   <button
-                    onClick={() => setWatched({ driverId: driver._id, isWatched: !driver.isWatched, adminSecret: secret })}
+                    onClick={() => toggleWatched(driver._id, driver.displayName, !driver.isWatched)}
                     className="rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
                   >
                     {driver.isWatched ? "Unwatch" : "Watch"}

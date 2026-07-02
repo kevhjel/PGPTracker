@@ -17,6 +17,13 @@ const EMPTY_RECHECK_RESCHEDULE_MS = 30 * 60 * 1000;
 const EMPTY_RECHECK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const EMPTY_RECHECK_BATCH_SIZE = 100;
 
+// A batch can take longer than expected under network/retry pressure; give
+// it a generous margin before another caller is allowed to treat it as dead.
+const SCRAPE_CHAIN_KEY = "scrapeBatchChain";
+const SCRAPE_CHAIN_STALE_MS = 3 * 60 * 1000;
+const EMPTY_RECHECK_CHAIN_KEY = "recheckEmptyHeatsChain";
+const EMPTY_RECHECK_CHAIN_STALE_MS = 10 * 60 * 1000;
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -52,6 +59,7 @@ async function scrapeAndStoreHeat(ctx: ActionCtx, heatNo: number): Promise<Scrap
   }
 
   const html = await res.text();
+  let payload: ReturnType<typeof parseHeatDetailsHtml>;
   try {
     const parsed = parseHeatDetailsHtml(html);
     if (!parsed.rawHeatType) {
@@ -62,12 +70,22 @@ async function scrapeAndStoreHeat(ctx: ActionCtx, heatNo: number): Promise<Scrap
       });
       return "error";
     }
+    payload = parsed;
+  } catch (err) {
+    await ctx.runMutation(internal.heats.logScrapeError, {
+      heatNo,
+      stage: "parse",
+      errorMessage: String(err),
+    });
+    return "error";
+  }
 
-    const { category, resultModeHint } = categorizeHeatType(parsed.rawHeatType);
-    const isEmpty = parsed.results.length === 0 && parsed.winnerRaw === "-";
+  try {
+    const { category, resultModeHint } = categorizeHeatType(payload.rawHeatType);
+    const isEmpty = payload.results.length === 0 && payload.winnerRaw === "-";
 
-    const entries = parsed.results.map((r) => {
-      const laps = r.name ? parsed.lapsByName.get(r.name) ?? [] : [];
+    const entries = payload.results.map((r) => {
+      const laps = r.name ? payload.lapsByName.get(r.name) ?? [] : [];
       return {
         driverNameRaw: r.name ?? r.teamName ?? "Unknown",
         custId: r.custId,
@@ -92,12 +110,12 @@ async function scrapeAndStoreHeat(ctx: ActionCtx, heatNo: number): Promise<Scrap
 
     await ctx.runMutation(internal.heats.upsertHeat, {
       heatNo,
-      raceDateTime: parsed.raceDateTime,
-      rawHeatType: parsed.rawHeatType,
+      raceDateTime: payload.raceDateTime,
+      rawHeatType: payload.rawHeatType,
       heatCategory: category,
       resultMode,
       status: isEmpty ? "empty" : "scraped",
-      winnerRaw: parsed.winnerRaw,
+      winnerRaw: payload.winnerRaw,
       entries,
     });
 
@@ -105,7 +123,7 @@ async function scrapeAndStoreHeat(ctx: ActionCtx, heatNo: number): Promise<Scrap
   } catch (err) {
     await ctx.runMutation(internal.heats.logScrapeError, {
       heatNo,
-      stage: "parse",
+      stage: "write",
       errorMessage: String(err),
     });
     return "error";
@@ -142,12 +160,35 @@ export const adminRunBatchNow = action({
  * (fast cadence while there's still a backlog of un-scraped heat numbers)
  * and the ongoing live poll (slow cadence once it hits a run of consecutive
  * "not allocated yet" responses, i.e. it has caught up to the present).
+ *
+ * Guarded by an owner-token lock (see appSettings.claimChainIfIdle) so that
+ * a fresh trigger - the cron watchdog, a redeploy re-firing that watchdog,
+ * or "run batch now" - can never run alongside an already-live chain. A
+ * continuing link (one that already holds the token) always proceeds; only
+ * a *new* chain has to prove the previous owner is actually dead first.
  */
 export const scrapeBatch = internalAction({
-  args: {},
-  handler: async (ctx) => {
+  args: { chainToken: v.optional(v.string()) },
+  handler: async (ctx, { chainToken }) => {
     const enabled = await ctx.runQuery(internal.appSettings.getInternal, { key: "scrapingEnabled" });
     if (enabled === false) return;
+
+    let myToken = chainToken;
+    if (myToken) {
+      const stillOwner = await ctx.runMutation(internal.appSettings.heartbeatIfOwner, {
+        key: SCRAPE_CHAIN_KEY,
+        token: myToken,
+      });
+      if (!stillOwner) return; // superseded by a newer chain; let this one die quietly
+    } else {
+      myToken = crypto.randomUUID();
+      const claimed = await ctx.runMutation(internal.appSettings.claimChainIfIdle, {
+        key: SCRAPE_CHAIN_KEY,
+        newToken: myToken,
+        staleAfterMs: SCRAPE_CHAIN_STALE_MS,
+      });
+      if (!claimed) return; // a live chain already owns this; don't run a duplicate
+    }
 
     const cursorValue = await ctx.runQuery(internal.appSettings.getInternal, { key: "backfillCursor" });
     let heatNo = typeof cursorValue === "number" ? cursorValue : 1;
@@ -168,7 +209,7 @@ export const scrapeBatch = internalAction({
     await ctx.scheduler.runAfter(
       reachedLiveEdge ? CAUGHT_UP_RESCHEDULE_MS : BACKFILL_RESCHEDULE_MS,
       internal.actions.scrapeHeats.scrapeBatch,
-      {},
+      { chainToken: myToken },
     );
   },
 });
@@ -176,13 +217,30 @@ export const scrapeBatch = internalAction({
 /**
  * Separate self-rescheduling loop that revisits "empty" (scheduled but not
  * yet raced) heats so results appear once ClubSpeed posts them, without
- * re-walking the entire dataset.
+ * re-walking the entire dataset. Same owner-token guard as scrapeBatch.
  */
 export const recheckEmptyHeats = internalAction({
-  args: {},
-  handler: async (ctx) => {
+  args: { chainToken: v.optional(v.string()) },
+  handler: async (ctx, { chainToken }) => {
     const enabled = await ctx.runQuery(internal.appSettings.getInternal, { key: "scrapingEnabled" });
     if (enabled === false) return;
+
+    let myToken = chainToken;
+    if (myToken) {
+      const stillOwner = await ctx.runMutation(internal.appSettings.heartbeatIfOwner, {
+        key: EMPTY_RECHECK_CHAIN_KEY,
+        token: myToken,
+      });
+      if (!stillOwner) return;
+    } else {
+      myToken = crypto.randomUUID();
+      const claimed = await ctx.runMutation(internal.appSettings.claimChainIfIdle, {
+        key: EMPTY_RECHECK_CHAIN_KEY,
+        newToken: myToken,
+        staleAfterMs: EMPTY_RECHECK_CHAIN_STALE_MS,
+      });
+      if (!claimed) return;
+    }
 
     const emptyHeats = await ctx.runQuery(internal.heats.listEmptyForRecheck, {
       maxAgeMs: EMPTY_RECHECK_MAX_AGE_MS,
@@ -194,6 +252,8 @@ export const recheckEmptyHeats = internalAction({
       await sleep(REQUEST_DELAY_MS);
     }
 
-    await ctx.scheduler.runAfter(EMPTY_RECHECK_RESCHEDULE_MS, internal.actions.scrapeHeats.recheckEmptyHeats, {});
+    await ctx.scheduler.runAfter(EMPTY_RECHECK_RESCHEDULE_MS, internal.actions.scrapeHeats.recheckEmptyHeats, {
+      chainToken: myToken,
+    });
   },
 });

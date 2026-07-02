@@ -361,7 +361,7 @@ export const upsertHeat = internalMutation({
 export const logScrapeError = internalMutation({
   args: {
     heatNo: v.number(),
-    stage: v.union(v.literal("fetch"), v.literal("parse")),
+    stage: v.union(v.literal("fetch"), v.literal("parse"), v.literal("write")),
     errorMessage: v.string(),
   },
   handler: async (ctx, args) => {
@@ -382,5 +382,102 @@ export const listRecentErrors = query({
       .withIndex("by_attemptedAt")
       .order("desc")
       .take(limit ?? 50);
+  },
+});
+
+export const listDistinctErrorHeatNos = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const errors = await ctx.db.query("heatScrapeErrors").collect();
+    return [...new Set(errors.map((e) => e.heatNo))].sort((a, b) => a - b);
+  },
+});
+
+export const countHeatsBefore = internalQuery({
+  args: { cutoffHeatNo: v.number() },
+  handler: async (ctx, { cutoffHeatNo }) => {
+    const heats = await ctx.db
+      .query("heats")
+      .withIndex("by_heatNo", (q) => q.lt("heatNo", cutoffHeatNo))
+      .collect();
+    return { heatCount: heats.length };
+  },
+});
+
+/** Deletes up to `batchSize` heats (oldest first) below cutoffHeatNo, their
+ * entries, and recomputes/prunes affected drivers. Call repeatedly until
+ * `hasMore` is false; a final appStats fixup runs separately (see
+ * `finalizeStatsAfterPurge`) since minHeatDate can't be maintained
+ * incrementally without a full scan. */
+export const purgeHeatsBeforeBatch = internalMutation({
+  args: { cutoffHeatNo: v.number(), batchSize: v.number() },
+  handler: async (ctx, { cutoffHeatNo, batchSize }) => {
+    const heats = await ctx.db
+      .query("heats")
+      .withIndex("by_heatNo", (q) => q.lt("heatNo", cutoffHeatNo))
+      .take(batchSize);
+
+    const touchedDriverIds = new Set<Id<"drivers">>();
+    let lapsDeleted = 0;
+    let heatsScrapedDeleted = 0;
+
+    for (const heat of heats) {
+      if (heat.status === "scraped") heatsScrapedDeleted++;
+      const entries = await ctx.db
+        .query("heatEntries")
+        .withIndex("by_heat", (q) => q.eq("heatId", heat._id))
+        .collect();
+      for (const entry of entries) {
+        if (entry.driverId) touchedDriverIds.add(entry.driverId);
+        lapsDeleted += entry.numLaps;
+        await ctx.db.delete(entry._id);
+      }
+      await ctx.db.delete(heat._id);
+
+      const errors = await ctx.db
+        .query("heatScrapeErrors")
+        .withIndex("by_heatNo", (q) => q.eq("heatNo", heat.heatNo))
+        .collect();
+      for (const err of errors) await ctx.db.delete(err._id);
+    }
+
+    let driversDeleted = 0;
+    for (const driverId of touchedDriverIds) {
+      await recomputeDriverAggregates(ctx, driverId);
+      const driver = await ctx.db.get(driverId);
+      if (driver && driver.totalHeats === 0 && !driver.mergedIntoDriverId) {
+        await ctx.db.delete(driverId);
+        driversDeleted++;
+      }
+    }
+
+    const stats = await ctx.db.query("appStats").first();
+    if (stats) {
+      await ctx.db.patch(stats._id, {
+        totalHeatsScraped: Math.max(0, stats.totalHeatsScraped - heatsScrapedDeleted),
+        totalLaps: Math.max(0, stats.totalLaps - lapsDeleted),
+        totalDrivers: Math.max(0, stats.totalDrivers - driversDeleted),
+        updatedAt: Date.now(),
+      });
+    }
+
+    return { deletedCount: heats.length, hasMore: heats.length === batchSize };
+  },
+});
+
+/** Recomputes appStats.minHeatDate/maxHeatDate from scratch via cheap indexed
+ * boundary queries (not a full scan) - run once after all purge batches. */
+export const finalizeStatsAfterPurge = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const stats = await ctx.db.query("appStats").first();
+    if (!stats) return;
+    const earliest = await ctx.db.query("heats").withIndex("by_date").order("asc").first();
+    const latest = await ctx.db.query("heats").withIndex("by_date").order("desc").first();
+    await ctx.db.patch(stats._id, {
+      minHeatDate: earliest?.raceDateTime,
+      maxHeatDate: latest?.raceDateTime,
+      updatedAt: Date.now(),
+    });
   },
 });

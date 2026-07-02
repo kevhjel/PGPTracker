@@ -30,7 +30,8 @@ export default defineSchema({
   })
     .index("by_custId", ["custId"])
     .index("by_watched", ["isWatched"])
-    .index("by_bestLap", ["bestLapMs"]),
+    .index("by_bestLap", ["bestLapMs"])
+    .searchIndex("search_displayName", { searchField: "displayName" }),
 
   heats: defineTable({
     heatNo: v.number(),
@@ -86,7 +87,7 @@ export default defineSchema({
   heatScrapeErrors: defineTable({
     heatNo: v.number(),
     attemptedAt: v.number(),
-    stage: v.union(v.literal("fetch"), v.literal("parse")),
+    stage: v.union(v.literal("fetch"), v.literal("parse"), v.literal("write")),
     errorMessage: v.string(),
   })
     .index("by_heatNo", ["heatNo"])

@@ -4,9 +4,12 @@ import { api } from "../../../convex/_generated/api";
 import { useAdminSecret } from "../../lib/adminSecret";
 import { formatDate } from "../../lib/format";
 
+type SecretStatus = "unknown" | "checking" | "valid" | "invalid";
+
 export default function AdminScrapeHealthPage() {
   const { secret, setSecret } = useAdminSecret();
   const [secretInput, setSecretInput] = useState(secret);
+  const [secretStatus, setSecretStatus] = useState<SecretStatus>("unknown");
   const [heatNoInput, setHeatNoInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -16,8 +19,20 @@ export default function AdminScrapeHealthPage() {
   const errors = useQuery(api.heats.listRecentErrors, { limit: 25 });
 
   const setSetting = useMutation(api.appSettings.set);
+  const verifyAdminSecret = useMutation(api.appSettings.verifyAdminSecret);
   const adminScrapeHeat = useAction(api.actions.scrapeHeats.adminScrapeHeat);
   const adminRunBatchNow = useAction(api.actions.scrapeHeats.adminRunBatchNow);
+
+  const saveSecret = async () => {
+    setSecret(secretInput);
+    setSecretStatus("checking");
+    try {
+      await verifyAdminSecret({ adminSecret: secretInput });
+      setSecretStatus("valid");
+    } catch {
+      setSecretStatus("invalid");
+    }
+  };
 
   const toggleScraping = async () => {
     setBusy(true);
@@ -69,17 +84,30 @@ export default function AdminScrapeHealthPage() {
           <input
             type="password"
             value={secretInput}
-            onChange={(e) => setSecretInput(e.target.value)}
+            onChange={(e) => {
+              setSecretInput(e.target.value);
+              setSecretStatus("unknown");
+            }}
             className="flex-1 rounded-md border border-neutral-300 px-3 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-900"
             placeholder="Enter admin secret"
           />
           <button
-            onClick={() => setSecret(secretInput)}
+            onClick={saveSecret}
+            disabled={secretStatus === "checking"}
             className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white dark:bg-neutral-100 dark:text-neutral-900"
           >
-            Save
+            {secretStatus === "checking" ? "Checking…" : "Save"}
           </button>
         </div>
+        {secretStatus === "valid" && (
+          <p className="mt-2 text-sm text-green-600 dark:text-green-400">✓ Saved — admin access unlocked.</p>
+        )}
+        {secretStatus === "invalid" && (
+          <p className="mt-2 text-sm text-red-600 dark:text-red-400">
+            ✗ That secret was rejected by the server. Double check it matches this deployment's{" "}
+            <code>ADMIN_SECRET</code> env var.
+          </p>
+        )}
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

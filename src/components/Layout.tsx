@@ -17,6 +17,7 @@ export default function Layout() {
           </NavLink>
           <nav className="flex flex-wrap gap-1">
             <NavLink to="/heats" className={navLinkClass}>Heats</NavLink>
+            <NavLink to="/drivers" className={navLinkClass}>Drivers</NavLink>
             <NavLink to="/leaderboard" className={navLinkClass}>Leaderboard</NavLink>
             <NavLink to="/watchlist" className={navLinkClass}>Watchlist</NavLink>
             <NavLink to="/endurance" className={navLinkClass}>Endurance</NavLink>
