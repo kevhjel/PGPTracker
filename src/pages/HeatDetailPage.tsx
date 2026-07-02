@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../../convex/_generated/api";
 import { formatDate, formatGap, formatHeatCategory, formatLapTime } from "../lib/format";
 import GapFromLeaderChart from "../components/GapFromLeaderChart";
+import LapTimesChart from "../components/LapTimesChart";
 
 export default function HeatDetailPage() {
   const { heatNo } = useParams();
@@ -102,6 +103,11 @@ export default function HeatDetailPage() {
           <div>
             <h2 className="text-lg font-semibold mb-3">Gap from leader by lap</h2>
             <GapFromLeaderChart entries={entries} />
+          </div>
+
+          <div>
+            <h2 className="text-lg font-semibold mb-3">Lap times</h2>
+            <LapTimesChart entries={entries} />
           </div>
         </>
       )}
