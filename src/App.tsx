@@ -1,5 +1,6 @@
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import Layout from './components/Layout'
+import AdminLayout from './components/AdminLayout'
 import HomePage from './pages/HomePage'
 import HeatBrowserPage from './pages/HeatBrowserPage'
 import HeatDetailPage from './pages/HeatDetailPage'
@@ -26,8 +27,11 @@ function App() {
         <Route path="/drivers/:driverId/analytics" element={<DriverAnalyticsPage />} />
         <Route path="/watchlist" element={<WatchlistPage />} />
         <Route path="/endurance" element={<EndurancePage />} />
-        <Route path="/admin/scrape-health" element={<AdminScrapeHealthPage />} />
-        <Route path="/admin/drivers" element={<AdminDriversPage />} />
+        <Route path="/admin" element={<AdminLayout />}>
+          <Route index element={<Navigate to="scrape-health" replace />} />
+          <Route path="scrape-health" element={<AdminScrapeHealthPage />} />
+          <Route path="drivers" element={<AdminDriversPage />} />
+        </Route>
         <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>

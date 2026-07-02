@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
+import { Link } from "react-router-dom";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { useAdminSecret } from "../../lib/adminSecret";
@@ -59,9 +60,9 @@ export default function AdminDriversPage() {
       {!secret && (
         <p className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
           No admin secret is set yet. Every action below will fail until you save one on the{" "}
-          <a href="/admin/scrape-health" className="underline">
+          <Link to="/admin/scrape-health" className="underline">
             Scrape Health
-          </a>{" "}
+          </Link>{" "}
           page.
         </p>
       )}
