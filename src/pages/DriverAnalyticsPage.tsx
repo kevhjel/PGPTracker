@@ -127,6 +127,7 @@ export default function DriverAnalyticsPage() {
           <YAxis
             stroke="var(--chart-muted)"
             tick={{ fill: "var(--chart-muted)", fontSize: 12 }}
+            domain={["dataMin - 1", "dataMax + 1"]}
             label={{ value: "Lap time (s)", angle: -90, position: "insideLeft", fill: "var(--chart-muted)" }}
           />
           <Tooltip

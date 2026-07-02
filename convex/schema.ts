@@ -19,6 +19,8 @@ export default defineSchema({
     isWatched: v.boolean(),
     totalHeats: v.number(),
     totalLaps: v.number(),
+    totalWins: v.optional(v.number()),
+    totalPodiums: v.optional(v.number()),
     bestLapMs: v.optional(v.number()),
     bestLapHeatId: v.optional(v.id("heats")),
     bestLapByCategory: v.optional(
@@ -75,7 +77,8 @@ export default defineSchema({
     .index("by_heatNo", ["heatNo"])
     .index("by_driver", ["driverId"])
     .index("by_driver_bestLap", ["driverId", "bestLapMs"])
-    .index("by_category_bestLap", ["heatCategory", "bestLapMs"]),
+    .index("by_category_bestLap", ["heatCategory", "bestLapMs"])
+    .index("by_bestLap", ["bestLapMs"]),
 
   driverMerges: defineTable({
     sourceDriverId: v.id("drivers"),

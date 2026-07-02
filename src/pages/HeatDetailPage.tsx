@@ -1,15 +1,34 @@
+import { useMemo, useState } from "react";
 import { useQuery } from "convex/react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../../convex/_generated/api";
 import { formatDate, formatGap, formatHeatCategory, formatLapTime } from "../lib/format";
 import GapFromLeaderChart from "../components/GapFromLeaderChart";
 import LapTimesChart from "../components/LapTimesChart";
+import { seriesColor } from "../lib/chartColors";
 
 export default function HeatDetailPage() {
   const { heatNo } = useParams();
   const navigate = useNavigate();
   const heatNoNum = Number(heatNo);
   const data = useQuery(api.heats.getByHeatNo, Number.isFinite(heatNoNum) ? { heatNo: heatNoNum } : "skip");
+
+  const driversWithLaps = useMemo(
+    () => (data ? data.entries.filter((e) => e.laps.length > 0).map((e) => e.driverNameRaw) : []),
+    [data],
+  );
+  const [deselected, setDeselected] = useState<Set<string>>(new Set());
+  const selectedOrder = driversWithLaps.filter((name) => !deselected.has(name));
+  const selectedNames = new Set(selectedOrder);
+
+  function toggleDriver(name: string) {
+    setDeselected((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }
 
   if (!Number.isFinite(heatNoNum)) {
     return <p className="text-neutral-500">Invalid heat number.</p>;
@@ -100,14 +119,51 @@ export default function HeatDetailPage() {
             </table>
           </div>
 
+          {driversWithLaps.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm text-neutral-500">Drivers:</span>
+              {driversWithLaps.map((name) => {
+                const colorIndex = selectedOrder.indexOf(name);
+                const isSelected = colorIndex !== -1;
+                const color = isSelected && colorIndex < 8 ? seriesColor(colorIndex) : undefined;
+                return (
+                  <button
+                    key={name}
+                    onClick={() => toggleDriver(name)}
+                    className="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors"
+                    style={
+                      isSelected
+                        ? { borderColor: color ?? "var(--chart-muted)", color: color ?? "var(--chart-muted)" }
+                        : { borderColor: "var(--chart-gridline)", color: "var(--chart-muted)" }
+                    }
+                  >
+                    <span
+                      className="h-2 w-2 rounded-full"
+                      style={{ background: isSelected ? (color ?? "var(--chart-muted)") : "transparent", border: isSelected ? "none" : "1px solid var(--chart-muted)" }}
+                    />
+                    {name}
+                  </button>
+                );
+              })}
+              {deselected.size > 0 && (
+                <button
+                  onClick={() => setDeselected(new Set())}
+                  className="text-xs text-blue-600 hover:underline dark:text-blue-400"
+                >
+                  Show all
+                </button>
+              )}
+            </div>
+          )}
+
           <div>
             <h2 className="text-lg font-semibold mb-3">Gap from leader by lap</h2>
-            <GapFromLeaderChart entries={entries} />
+            <GapFromLeaderChart entries={entries} selectedNames={selectedNames} />
           </div>
 
           <div>
             <h2 className="text-lg font-semibold mb-3">Lap times</h2>
-            <LapTimesChart entries={entries} />
+            <LapTimesChart entries={entries} selectedNames={selectedNames} />
           </div>
         </>
       )}

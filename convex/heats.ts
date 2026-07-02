@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { query, internalQuery, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Id, Doc } from "./_generated/dataModel";
 import { recomputeDriverAggregates } from "./drivers";
 import { correctTrackLocalTimestamp } from "./lib/clubspeedParser";
 
@@ -182,8 +182,15 @@ export const listEntriesByDriver = query({
   },
 });
 
+const DATE_LEADERBOARD_MIN_VALID_LAP_MS = 76_000;
+const DATE_LEADERBOARD_MAX_HEATS = 500;
+const DATE_LEADERBOARD_MAX_ENTRIES = 3000;
+
 /** Date-scoped leaderboard: the one variant that can't use a driver's cached
- * all-time PB, since a PB field only ever holds the single best-ever value. */
+ * all-time PB, since a PB field only ever holds the single best-ever value.
+ * Bounded via heats.by_date first (never a full heatEntries collect - that
+ * table has hundreds of thousands of rows, well past Convex's per-function
+ * read limit), then reads each candidate heat's entries via heatEntries.by_heat. */
 export const dateScopedLeaderboard = query({
   args: {
     category: v.optional(v.string()),
@@ -192,37 +199,50 @@ export const dateScopedLeaderboard = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, { category, fromMs, toMs, limit }) => {
-    const entries = category
-      ? await ctx.db
-          .query("heatEntries")
-          .withIndex("by_category_bestLap", (q) => q.eq("heatCategory", category))
-          .collect()
-      : await ctx.db.query("heatEntries").collect();
+    const take = Math.min(limit ?? 100, 200);
 
-    const bestPerDriver = new Map<string, (typeof entries)[number]>();
-    for (const e of entries) {
-      if (!e.driverId || e.bestLapMs === undefined) continue;
-      const heat = await ctx.db.get(e.heatId);
-      if (!heat) continue;
-      if (fromMs !== undefined && heat.raceDateTime < fromMs) continue;
-      if (toMs !== undefined && heat.raceDateTime > toMs) continue;
-      const existing = bestPerDriver.get(e.driverId);
-      if (!existing || (existing.bestLapMs ?? Infinity) > e.bestLapMs) {
-        bestPerDriver.set(e.driverId, e);
+    const heats = await ctx.db
+      .query("heats")
+      .withIndex("by_date", (q) => {
+        if (fromMs !== undefined && toMs !== undefined) return q.gte("raceDateTime", fromMs).lte("raceDateTime", toMs);
+        if (fromMs !== undefined) return q.gte("raceDateTime", fromMs);
+        if (toMs !== undefined) return q.lte("raceDateTime", toMs);
+        return q;
+      })
+      .take(DATE_LEADERBOARD_MAX_HEATS);
+
+    const bestPerDriver = new Map<string, { entry: Doc<"heatEntries">; heat: Doc<"heats"> }>();
+    let entriesScanned = 0;
+    for (const heat of heats) {
+      if (category && heat.heatCategory !== category) continue;
+      if (entriesScanned >= DATE_LEADERBOARD_MAX_ENTRIES) break;
+      const entries = await ctx.db
+        .query("heatEntries")
+        .withIndex("by_heat", (q) => q.eq("heatId", heat._id))
+        .collect();
+      entriesScanned += entries.length;
+      for (const e of entries) {
+        if (!e.driverId || e.bestLapMs === undefined || e.bestLapMs < DATE_LEADERBOARD_MIN_VALID_LAP_MS) continue;
+        const existing = bestPerDriver.get(e.driverId);
+        if (!existing || (existing.entry.bestLapMs ?? Infinity) > e.bestLapMs) {
+          bestPerDriver.set(e.driverId, { entry: e, heat });
+        }
       }
     }
 
     const ranked = Array.from(bestPerDriver.values()).sort(
-      (a, b) => (a.bestLapMs ?? Infinity) - (b.bestLapMs ?? Infinity),
+      (a, b) => (a.entry.bestLapMs ?? Infinity) - (b.entry.bestLapMs ?? Infinity),
     );
-    const take = limit ?? 100;
-    return await Promise.all(
-      ranked.slice(0, take).map(async (e) => ({
-        entry: e,
-        driver: e.driverId ? await ctx.db.get(e.driverId) : null,
-        heat: await ctx.db.get(e.heatId),
+
+    const rows = await Promise.all(
+      ranked.slice(0, take * 2).map(async (r) => ({
+        entry: r.entry,
+        heat: r.heat,
+        driver: r.entry.driverId ? await ctx.db.get(r.entry.driverId) : null,
       })),
     );
+
+    return rows.filter((r) => !r.driver?.mergedIntoDriverId).slice(0, take);
   },
 });
 

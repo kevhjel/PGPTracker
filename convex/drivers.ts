@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { paginationOptsValidator } from "convex/server";
 import { query, mutation, internalMutation, internalQuery } from "./_generated/server";
 import type { Id, Doc } from "./_generated/dataModel";
 import { requireAdmin } from "./lib/adminAuth";
@@ -63,33 +64,56 @@ export const search = query({
   },
 });
 
-/** All-time fastest-lap leaderboard - a single indexed read, zero computation. */
+// ClubSpeed timing glitches occasionally record implausibly fast "laps"
+// (sub-76s isn't physically achievable on this track); exclude them from
+// leaderboards rather than letting them dominate the fastest-lap rankings.
+const MIN_VALID_LAP_MS = 76_000;
+
+/**
+ * All-time fastest-lap leaderboard. Reads from heatEntries via an indexed,
+ * bounded range scan (never a full-table collect - the drivers table alone
+ * has ~100k rows, well past Convex's per-function read limit) so both the
+ * unfiltered and category-filtered cases stay cheap regardless of dataset
+ * size, and both apply the same MIN_VALID_LAP_MS floor.
+ */
 export const allTimeLeaderboard = query({
   args: { category: v.optional(v.string()), limit: v.optional(v.number()) },
   handler: async (ctx, { category, limit }) => {
-    const take = limit ?? 100;
-    let ranked: { driver: Doc<"drivers">; bestLapMs: number; heatId?: Id<"heats"> }[];
-    if (category) {
-      const drivers = await ctx.db.query("drivers").collect();
-      ranked = drivers
-        .filter((d) => d.bestLapByCategory?.[category] && !d.mergedIntoDriverId)
-        .sort((a, b) => a.bestLapByCategory![category].lapMs - b.bestLapByCategory![category].lapMs)
-        .slice(0, take)
-        .map((d) => ({ driver: d, bestLapMs: d.bestLapByCategory![category].lapMs, heatId: d.bestLapByCategory![category].heatId }));
-    } else {
-      const drivers = await ctx.db
-        .query("drivers")
-        .withIndex("by_bestLap")
-        .order("asc")
-        .collect();
-      ranked = drivers
-        .filter((d) => d.bestLapMs !== undefined && !d.mergedIntoDriverId)
-        .slice(0, take)
-        .map((d) => ({ driver: d, bestLapMs: d.bestLapMs!, heatId: d.bestLapHeatId }));
+    const take = Math.min(limit ?? 100, 200);
+    const overfetchCap = take * 5;
+
+    const candidates = category
+      ? await ctx.db
+          .query("heatEntries")
+          .withIndex("by_category_bestLap", (q) => q.eq("heatCategory", category).gte("bestLapMs", MIN_VALID_LAP_MS))
+          .order("asc")
+          .take(overfetchCap)
+      : await ctx.db
+          .query("heatEntries")
+          .withIndex("by_bestLap", (q) => q.gte("bestLapMs", MIN_VALID_LAP_MS))
+          .order("asc")
+          .take(overfetchCap);
+
+    const bestPerDriver = new Map<string, { driverId: Id<"drivers">; bestLapMs: number; heatId: Id<"heats"> }>();
+    for (const e of candidates) {
+      if (!e.driverId || e.bestLapMs === undefined) continue;
+      if (!bestPerDriver.has(e.driverId)) {
+        bestPerDriver.set(e.driverId, { driverId: e.driverId, bestLapMs: e.bestLapMs, heatId: e.heatId });
+      }
     }
-    return await Promise.all(
-      ranked.map(async (r) => ({ ...r, heat: r.heatId ? await ctx.db.get(r.heatId) : null })),
+
+    const rows = await Promise.all(
+      Array.from(bestPerDriver.values()).map(async (r) => ({
+        driver: await ctx.db.get(r.driverId),
+        bestLapMs: r.bestLapMs,
+        heat: await ctx.db.get(r.heatId),
+      })),
     );
+
+    return rows
+      .filter((r): r is typeof r & { driver: Doc<"drivers"> } => !!r.driver && !r.driver.mergedIntoDriverId)
+      .sort((a, b) => a.bestLapMs - b.bestLapMs)
+      .slice(0, take);
   },
 });
 
@@ -120,6 +144,8 @@ export async function recomputeDriverAggregates(
     .collect();
 
   let totalLaps = 0;
+  let totalWins = 0;
+  let totalPodiums = 0;
   let bestLapMs: number | undefined;
   let bestLapHeatId: Id<"heats"> | undefined;
   let firstSeenHeatNo = Infinity;
@@ -128,6 +154,8 @@ export async function recomputeDriverAggregates(
 
   for (const e of entries) {
     totalLaps += e.numLaps;
+    if (e.position === 1) totalWins++;
+    if (e.position >= 1 && e.position <= 3) totalPodiums++;
     firstSeenHeatNo = Math.min(firstSeenHeatNo, e.heatNo);
     lastSeenHeatNo = Math.max(lastSeenHeatNo, e.heatNo);
     if (e.bestLapMs !== undefined) {
@@ -145,6 +173,8 @@ export async function recomputeDriverAggregates(
   await ctx.db.patch(driverId, {
     totalHeats: entries.length,
     totalLaps,
+    totalWins,
+    totalPodiums,
     bestLapMs,
     bestLapHeatId,
     bestLapByCategory: Object.keys(bestLapByCategory).length > 0 ? bestLapByCategory : undefined,
@@ -207,6 +237,35 @@ export const recomputeAggregates = internalMutation({
   args: { driverId: v.id("drivers") },
   handler: async (ctx, { driverId }) => {
     await recomputeDriverAggregates(ctx, driverId);
+  },
+});
+
+const WINS_PODIUMS_MIGRATION_DONE_KEY = "winsPodiumsMigrationDone";
+
+/** One-time backfill of totalWins/totalPodiums (added after most drivers
+ * already existed) via recomputeDriverAggregates, paginated across the
+ * whole drivers table. Call repeatedly passing back the previous
+ * continueCursor until isDone; locks itself out via appSettings afterward
+ * so a stray re-run is a no-op rather than redundant work. */
+export const backfillWinsPodiumsBatch = internalMutation({
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, { paginationOpts }) => {
+    const alreadyDone = await ctx.db
+      .query("appSettings")
+      .withIndex("by_key", (q) => q.eq("key", WINS_PODIUMS_MIGRATION_DONE_KEY))
+      .unique();
+    if (alreadyDone) {
+      return { isDone: true, continueCursor: "", processedCount: 0, skipped: "already run" };
+    }
+
+    const result = await ctx.db.query("drivers").paginate(paginationOpts);
+    for (const driver of result.page) {
+      await recomputeDriverAggregates(ctx, driver._id);
+    }
+    if (result.isDone) {
+      await ctx.db.insert("appSettings", { key: WINS_PODIUMS_MIGRATION_DONE_KEY, value: Date.now() });
+    }
+    return { isDone: result.isDone, continueCursor: result.continueCursor, processedCount: result.page.length };
   },
 });
 

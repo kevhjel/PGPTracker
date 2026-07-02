@@ -15,10 +15,22 @@ interface EntryLike {
   laps: { lapNo: number; lapTimeMs: number }[];
 }
 
-export default function LapTimesChart({ entries }: { entries: EntryLike[] }) {
-  const withLaps = entries.filter((e) => e.laps.length > 0);
+export default function LapTimesChart({
+  entries,
+  selectedNames,
+}: {
+  entries: EntryLike[];
+  selectedNames?: Set<string>;
+}) {
+  const withLaps = entries.filter(
+    (e) => e.laps.length > 0 && (!selectedNames || selectedNames.has(e.driverNameRaw)),
+  );
   if (withLaps.length === 0) {
-    return <p className="text-sm text-neutral-500">No lap-by-lap data available for this heat.</p>;
+    return (
+      <p className="text-sm text-neutral-500">
+        {selectedNames ? "No drivers selected." : "No lap-by-lap data available for this heat."}
+      </p>
+    );
   }
 
   const maxLaps = Math.max(...withLaps.map((e) => e.laps.length));
@@ -53,6 +65,7 @@ export default function LapTimesChart({ entries }: { entries: EntryLike[] }) {
           label={{ value: "Lap time (s)", angle: -90, position: "insideLeft", fill: "var(--chart-muted)" }}
         />
         <Tooltip
+          wrapperStyle={{ zIndex: 10 }}
           contentStyle={{
             background: "var(--chart-surface)",
             border: "1px solid var(--chart-gridline)",
