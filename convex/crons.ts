@@ -19,5 +19,11 @@ crons.interval(
   internal.actions.scrapeHeats.recheckMissedHeats,
   {},
 );
+crons.interval(
+  "recompute wet-detection baselines",
+  { hours: 24 },
+  internal.wetDetection.recomputeCategoryBaselines,
+  {},
+);
 
 export default crons;

@@ -3,6 +3,7 @@ import { useQuery } from "convex/react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../../convex/_generated/api";
 import { formatDate, formatHeatCategory } from "../lib/format";
+import WetBadge from "../components/WetBadge";
 
 const CATEGORIES = [
   "arrive_and_drive",
@@ -86,7 +87,12 @@ export default function HeatBrowserPage() {
                     #{heat.heatNo}
                   </Link>
                 </td>
-                <td className="px-3 py-2">{formatHeatCategory(heat.heatCategory)}</td>
+                <td className="px-3 py-2">
+                  <span className="inline-flex items-center gap-2">
+                    {formatHeatCategory(heat.heatCategory)}
+                    {heat.isWet && <WetBadge ratio={heat.wetnessRatio} />}
+                  </span>
+                </td>
                 <td className="px-3 py-2">{formatDate(heat.raceDateTime)}</td>
                 <td className="px-3 py-2">{heat.status === "empty" ? "Not yet raced" : heat.winnerRaw}</td>
                 <td className="px-3 py-2">{heat.numEntries}</td>

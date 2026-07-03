@@ -44,6 +44,7 @@ export default function DriverAnalyticsPage() {
   const laps = useQuery(api.heats.listAllLapsForDriver, { driverId: id });
 
   const [hideOutlap, setHideOutlap] = useState(true);
+  const [hideWet, setHideWet] = useState(true);
   const [removeOutliers, setRemoveOutliers] = useState(false);
   const [showMovingAvg, setShowMovingAvg] = useState(true);
   const [showTrendline, setShowTrendline] = useState(false);
@@ -51,6 +52,7 @@ export default function DriverAnalyticsPage() {
   const chartData = useMemo(() => {
     if (!laps) return [];
     let filtered = hideOutlap ? laps.filter((l) => l.lapNo !== 1) : laps;
+    if (hideWet) filtered = filtered.filter((l) => !l.isWet);
 
     if (removeOutliers && filtered.length > 4) {
       const sorted = [...filtered.map((l) => l.lapTimeMs)].sort((a, b) => a - b);
@@ -87,7 +89,7 @@ export default function DriverAnalyticsPage() {
     }
 
     return points;
-  }, [laps, hideOutlap, removeOutliers, showMovingAvg, showTrendline]);
+  }, [laps, hideOutlap, hideWet, removeOutliers, showMovingAvg, showTrendline]);
 
   if (driver === undefined || laps === undefined) return <p className="text-neutral-500">Loading…</p>;
   if (driver === null) return <p className="text-neutral-500">Driver not found.</p>;
@@ -100,6 +102,10 @@ export default function DriverAnalyticsPage() {
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={hideOutlap} onChange={(e) => setHideOutlap(e.target.checked)} />
           Hide out-lap (lap 1)
+        </label>
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={hideWet} onChange={(e) => setHideWet(e.target.checked)} />
+          Hide wet-race laps
         </label>
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={removeOutliers} onChange={(e) => setRemoveOutliers(e.target.checked)} />
@@ -171,7 +177,14 @@ export default function DriverAnalyticsPage() {
             <tbody>
               {laps.map((l, i) => (
                 <tr key={i} className="border-t border-neutral-100 dark:border-neutral-800">
-                  <td className="px-3 py-2">#{l.heatNo}</td>
+                  <td className="px-3 py-2">
+                    #{l.heatNo}
+                    {l.isWet && (
+                      <span className="ml-2 text-xs" style={{ color: "var(--series-1)" }} title="Wet race">
+                        (wet)
+                      </span>
+                    )}
+                  </td>
                   <td className="px-3 py-2">{formatDate(l.raceDateTime)}</td>
                   <td className="px-3 py-2 tabular-nums">{formatLapTime(l.lapTimeMs)}</td>
                 </tr>

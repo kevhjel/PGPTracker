@@ -1,10 +1,13 @@
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
-import { query, internalQuery, internalMutation } from "./_generated/server";
+import { query, mutation, internalQuery, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id, Doc } from "./_generated/dataModel";
 import { recomputeDriverAggregates } from "./drivers";
 import { correctTrackLocalTimestamp } from "./lib/clubspeedParser";
+import { MIN_VALID_LAP_MS } from "./lib/constants";
+import { classifyWetness, MIN_ENTRIES_FOR_CLASSIFICATION } from "./lib/wetDetection";
+import { requireAdmin } from "./lib/adminAuth";
 
 const heatCategoryValidator = v.union(
   v.literal("arrive_and_drive"),
@@ -153,11 +156,17 @@ export const listAllLapsForDriver = query({
     );
     withDates.sort((a, b) => (a.heat?.raceDateTime ?? 0) - (b.heat?.raceDateTime ?? 0));
 
-    const laps: { heatNo: number; raceDateTime: number; lapNo: number; lapTimeMs: number }[] = [];
+    const laps: { heatNo: number; raceDateTime: number; lapNo: number; lapTimeMs: number; isWet: boolean }[] = [];
     for (const { entry, heat } of withDates) {
       if (!heat) continue;
       for (const lap of entry.laps) {
-        laps.push({ heatNo: entry.heatNo, raceDateTime: heat.raceDateTime, lapNo: lap.lapNo, lapTimeMs: lap.lapTimeMs });
+        laps.push({
+          heatNo: entry.heatNo,
+          raceDateTime: heat.raceDateTime,
+          lapNo: lap.lapNo,
+          lapTimeMs: lap.lapTimeMs,
+          isWet: heat.isWet ?? false,
+        });
       }
     }
     return laps;
@@ -182,7 +191,6 @@ export const listEntriesByDriver = query({
   },
 });
 
-const DATE_LEADERBOARD_MIN_VALID_LAP_MS = 76_000;
 const DATE_LEADERBOARD_MAX_HEATS = 500;
 const DATE_LEADERBOARD_MAX_ENTRIES = 3000;
 
@@ -222,7 +230,7 @@ export const dateScopedLeaderboard = query({
         .collect();
       entriesScanned += entries.length;
       for (const e of entries) {
-        if (!e.driverId || e.bestLapMs === undefined || e.bestLapMs < DATE_LEADERBOARD_MIN_VALID_LAP_MS) continue;
+        if (!e.driverId || e.bestLapMs === undefined || e.bestLapMs < MIN_VALID_LAP_MS) continue;
         const existing = bestPerDriver.get(e.driverId);
         if (!existing || (existing.entry.bestLapMs ?? Infinity) > e.bestLapMs) {
           bestPerDriver.set(e.driverId, { entry: e, heat });
@@ -290,6 +298,39 @@ export const upsertHeat = internalMutation({
           .collect()
       : [];
 
+    // Admin-set wetness is sticky across rescrapes - only auto-classify when
+    // there's no standing override. Leaving these fields out of the patch
+    // below means an existing admin value is simply left untouched.
+    let wetnessFields: {
+      wetnessRatio?: number;
+      isWet?: boolean;
+      wetnessSource?: "auto" | "admin";
+      wetClassifiedAt?: number;
+    } = {};
+    if (existingHeat?.wetnessSource !== "admin") {
+      const baseline = await ctx.db
+        .query("categoryDryBaselines")
+        .withIndex("by_category", (q) => q.eq("heatCategory", args.heatCategory))
+        .unique();
+      const result = baseline
+        ? classifyWetness(
+            args.entries.map((e) => e.bestLapMs).filter((v): v is number => v !== undefined),
+            args.entries.map((e) => e.avgLapMs).filter((v): v is number => v !== undefined),
+            baseline.baselineFastLapMs,
+            baseline.baselineFastAvgLapMs,
+            MIN_VALID_LAP_MS,
+          )
+        : null;
+      if (result) {
+        wetnessFields = {
+          wetnessRatio: result.bestLapRatio,
+          isWet: result.isWet,
+          wetnessSource: "auto",
+          wetClassifiedAt: Date.now(),
+        };
+      }
+    }
+
     let heatId: Id<"heats">;
     if (existingHeat) {
       await ctx.db.patch(existingHeat._id, {
@@ -301,6 +342,7 @@ export const upsertHeat = internalMutation({
         winnerRaw: args.winnerRaw,
         numEntries: args.entries.length,
         scrapedAt: Date.now(),
+        ...wetnessFields,
       });
       heatId = existingHeat._id;
     } else {
@@ -314,6 +356,7 @@ export const upsertHeat = internalMutation({
         winnerRaw: args.winnerRaw,
         numEntries: args.entries.length,
         scrapedAt: Date.now(),
+        ...wetnessFields,
       });
     }
 
@@ -590,5 +633,140 @@ export const fixHeatTimezonesBatch = internalMutation({
       hasMore,
       patchedCount,
     };
+  },
+});
+
+const WETNESS_BACKFILL_DONE_KEY = "wetnessBackfillDone";
+
+/** One-time classification of every already-scraped heat, for history that
+ * predates the wet-detection feature. Call repeatedly with the previous
+ * response's `nextHeatNo` until `hasMore` is false. Requires
+ * `wetDetection.recomputeCategoryBaselines` to have been run at least once
+ * first, or heats will be skipped for lack of a baseline. Locks itself out
+ * via appSettings once done, same as `fixHeatTimezonesBatch` above. */
+export const backfillWetnessBatch = internalMutation({
+  args: { afterHeatNo: v.optional(v.number()), batchSize: v.number() },
+  handler: async (ctx, { afterHeatNo, batchSize }) => {
+    const alreadyDone = await ctx.db
+      .query("appSettings")
+      .withIndex("by_key", (q) => q.eq("key", WETNESS_BACKFILL_DONE_KEY))
+      .unique();
+    if (alreadyDone) {
+      return { nextHeatNo: afterHeatNo, hasMore: false, classifiedCount: 0, skipped: "already run" };
+    }
+
+    const heats = await ctx.db
+      .query("heats")
+      .withIndex("by_heatNo", (q) => (afterHeatNo === undefined ? q : q.gt("heatNo", afterHeatNo)))
+      .order("asc")
+      .take(batchSize);
+
+    const baselineCache = new Map<string, Doc<"categoryDryBaselines"> | null>();
+    async function getBaseline(category: string) {
+      if (!baselineCache.has(category)) {
+        const baseline = await ctx.db
+          .query("categoryDryBaselines")
+          .withIndex("by_category", (q) => q.eq("heatCategory", category))
+          .unique();
+        baselineCache.set(category, baseline);
+      }
+      return baselineCache.get(category)!;
+    }
+
+    let classifiedCount = 0;
+    for (const heat of heats) {
+      if (heat.status !== "scraped") continue;
+      if (heat.wetnessSource === "admin") continue;
+      if (heat.numEntries < MIN_ENTRIES_FOR_CLASSIFICATION) continue;
+
+      const baseline = await getBaseline(heat.heatCategory);
+      if (!baseline) continue;
+
+      const entries = await ctx.db
+        .query("heatEntries")
+        .withIndex("by_heat", (q) => q.eq("heatId", heat._id))
+        .collect();
+      const result = classifyWetness(
+        entries.map((e) => e.bestLapMs).filter((v): v is number => v !== undefined),
+        entries.map((e) => e.avgLapMs).filter((v): v is number => v !== undefined),
+        baseline.baselineFastLapMs,
+        baseline.baselineFastAvgLapMs,
+        MIN_VALID_LAP_MS,
+      );
+      if (result) {
+        await ctx.db.patch(heat._id, {
+          wetnessRatio: result.bestLapRatio,
+          isWet: result.isWet,
+          wetnessSource: "auto",
+          wetClassifiedAt: Date.now(),
+        });
+        classifiedCount++;
+      }
+    }
+
+    const hasMore = heats.length === batchSize;
+    if (!hasMore) {
+      await ctx.db.insert("appSettings", { key: WETNESS_BACKFILL_DONE_KEY, value: Date.now() });
+    }
+
+    return {
+      nextHeatNo: heats.length > 0 ? heats[heats.length - 1].heatNo : afterHeatNo,
+      hasMore,
+      classifiedCount,
+    };
+  },
+});
+
+/** Admin correction for a mis-classified heat. Sticky across rescrapes -
+ * upsertHeat won't overwrite an admin-sourced value. */
+export const setWetnessOverride = mutation({
+  args: { heatId: v.id("heats"), isWet: v.boolean(), adminSecret: v.string() },
+  handler: async (ctx, { heatId, isWet, adminSecret }) => {
+    requireAdmin(adminSecret);
+    await ctx.db.patch(heatId, { isWet, wetnessSource: "admin", wetClassifiedAt: Date.now() });
+  },
+});
+
+/** Relinquishes an admin override, re-running the normal auto-classification
+ * against the heat's current entries and cached category baseline so it
+ * isn't left stale until the next rescrape happens to touch it. */
+export const clearWetnessOverride = mutation({
+  args: { heatId: v.id("heats"), adminSecret: v.string() },
+  handler: async (ctx, { heatId, adminSecret }) => {
+    requireAdmin(adminSecret);
+    const heat = await ctx.db.get(heatId);
+    if (!heat) throw new Error("Heat not found");
+
+    const baseline = await ctx.db
+      .query("categoryDryBaselines")
+      .withIndex("by_category", (q) => q.eq("heatCategory", heat.heatCategory))
+      .unique();
+    if (!baseline) {
+      await ctx.db.patch(heatId, {
+        isWet: undefined,
+        wetnessRatio: undefined,
+        wetnessSource: undefined,
+        wetClassifiedAt: undefined,
+      });
+      return;
+    }
+
+    const entries = await ctx.db
+      .query("heatEntries")
+      .withIndex("by_heat", (q) => q.eq("heatId", heatId))
+      .collect();
+    const result = classifyWetness(
+      entries.map((e) => e.bestLapMs).filter((v): v is number => v !== undefined),
+      entries.map((e) => e.avgLapMs).filter((v): v is number => v !== undefined),
+      baseline.baselineFastLapMs,
+      baseline.baselineFastAvgLapMs,
+      MIN_VALID_LAP_MS,
+    );
+    await ctx.db.patch(heatId, {
+      wetnessRatio: result?.bestLapRatio,
+      isWet: result?.isWet,
+      wetnessSource: result ? "auto" : undefined,
+      wetClassifiedAt: result ? Date.now() : undefined,
+    });
   },
 });

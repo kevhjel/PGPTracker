@@ -3,6 +3,7 @@ import { paginationOptsValidator } from "convex/server";
 import { query, mutation, internalMutation, internalQuery } from "./_generated/server";
 import type { Id, Doc } from "./_generated/dataModel";
 import { requireAdmin } from "./lib/adminAuth";
+import { MIN_VALID_LAP_MS } from "./lib/constants";
 
 export const getByCustId = internalQuery({
   args: { custId: v.string() },
@@ -63,11 +64,6 @@ export const search = query({
     return results.filter((d) => !d.mergedIntoDriverId).slice(0, 20);
   },
 });
-
-// ClubSpeed timing glitches occasionally record implausibly fast "laps"
-// (sub-76s isn't physically achievable on this track); exclude them from
-// leaderboards rather than letting them dominate the fastest-lap rankings.
-const MIN_VALID_LAP_MS = 76_000;
 
 /**
  * All-time fastest-lap leaderboard. Reads from heatEntries via an indexed,

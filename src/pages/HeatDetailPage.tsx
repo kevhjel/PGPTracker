@@ -1,17 +1,23 @@
 import { useMemo, useState } from "react";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../../convex/_generated/api";
 import { formatDate, formatGap, formatHeatCategory, formatLapTime } from "../lib/format";
 import GapFromLeaderChart from "../components/GapFromLeaderChart";
 import LapTimesChart from "../components/LapTimesChart";
+import WetBadge from "../components/WetBadge";
 import { seriesColor } from "../lib/chartColors";
+import { useAdminSecret } from "../lib/adminSecret";
 
 export default function HeatDetailPage() {
   const { heatNo } = useParams();
   const navigate = useNavigate();
   const heatNoNum = Number(heatNo);
   const data = useQuery(api.heats.getByHeatNo, Number.isFinite(heatNoNum) ? { heatNo: heatNoNum } : "skip");
+  const { secret } = useAdminSecret();
+  const setWetnessOverride = useMutation(api.heats.setWetnessOverride);
+  const clearWetnessOverride = useMutation(api.heats.clearWetnessOverride);
+  const [wetnessMessage, setWetnessMessage] = useState("");
 
   const driversWithLaps = useMemo(
     () => (data ? data.entries.filter((e) => e.laps.length > 0).map((e) => e.driverNameRaw) : []),
@@ -56,8 +62,11 @@ export default function HeatDetailPage() {
       <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Heat #{heat.heatNo}</h1>
-          <p className="text-neutral-500">
-            {formatHeatCategory(heat.heatCategory)} · {heat.rawHeatType} · {formatDate(heat.raceDateTime)}
+          <p className="flex flex-wrap items-center gap-2 text-neutral-500">
+            <span>
+              {formatHeatCategory(heat.heatCategory)} · {heat.rawHeatType} · {formatDate(heat.raceDateTime)}
+            </span>
+            {heat.isWet && <WetBadge ratio={heat.wetnessRatio} />}
           </p>
         </div>
         <div className="flex gap-2">
@@ -75,6 +84,56 @@ export default function HeatDetailPage() {
           </button>
         </div>
       </div>
+
+      {secret && heat.status !== "empty" && (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-neutral-500">
+            Wet conditions ({heat.wetnessSource === "admin" ? "admin-set" : "auto"}):
+          </span>
+          <button
+            onClick={async () => {
+              setWetnessMessage("");
+              try {
+                await setWetnessOverride({ heatId: heat._id, isWet: true, adminSecret: secret });
+              } catch (err) {
+                setWetnessMessage(String(err));
+              }
+            }}
+            className="rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+          >
+            Mark wet
+          </button>
+          <button
+            onClick={async () => {
+              setWetnessMessage("");
+              try {
+                await setWetnessOverride({ heatId: heat._id, isWet: false, adminSecret: secret });
+              } catch (err) {
+                setWetnessMessage(String(err));
+              }
+            }}
+            className="rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+          >
+            Mark dry
+          </button>
+          {heat.wetnessSource === "admin" && (
+            <button
+              onClick={async () => {
+                setWetnessMessage("");
+                try {
+                  await clearWetnessOverride({ heatId: heat._id, adminSecret: secret });
+                } catch (err) {
+                  setWetnessMessage(String(err));
+                }
+              }}
+              className="rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+            >
+              Reset to auto
+            </button>
+          )}
+          {wetnessMessage && <span className="text-red-600 dark:text-red-400">{wetnessMessage}</span>}
+        </div>
+      )}
 
       {heat.status === "empty" ? (
         <p className="text-neutral-500">This heat hasn&apos;t been raced yet.</p>

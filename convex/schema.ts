@@ -45,6 +45,10 @@ export default defineSchema({
     winnerRaw: v.optional(v.string()),
     numEntries: v.number(),
     scrapedAt: v.number(),
+    wetnessRatio: v.optional(v.number()),
+    isWet: v.optional(v.boolean()),
+    wetnessSource: v.optional(v.union(v.literal("auto"), v.literal("admin"))),
+    wetClassifiedAt: v.optional(v.number()),
   })
     .index("by_heatNo", ["heatNo"])
     .index("by_status", ["status"])
@@ -106,6 +110,14 @@ export default defineSchema({
     key: v.string(),
     value: v.any(),
   }).index("by_key", ["key"]),
+
+  categoryDryBaselines: defineTable({
+    heatCategory: v.string(),
+    baselineFastLapMs: v.number(),
+    baselineFastAvgLapMs: v.number(),
+    sampleSize: v.number(),
+    computedAt: v.number(),
+  }).index("by_category", ["heatCategory"]),
 
   appStats: defineTable({
     totalHeatsScraped: v.number(),

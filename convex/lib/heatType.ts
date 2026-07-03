@@ -7,6 +7,16 @@ export type HeatCategory =
   | "endurance"
   | "other";
 
+export const HEAT_CATEGORIES: HeatCategory[] = [
+  "arrive_and_drive",
+  "league",
+  "pro_am",
+  "group_event",
+  "practice",
+  "endurance",
+  "other",
+];
+
 export type ResultModeHint = "individual" | "team" | "unknown";
 
 /**
