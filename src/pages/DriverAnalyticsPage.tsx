@@ -91,6 +91,8 @@ export default function DriverAnalyticsPage() {
     return points;
   }, [laps, hideOutlap, hideWet, removeOutliers, showMovingAvg, showTrendline]);
 
+  const recentFirstLaps = useMemo(() => (laps ? [...laps].reverse() : []), [laps]);
+
   if (driver === undefined || laps === undefined) return <p className="text-neutral-500">Loading…</p>;
   if (driver === null) return <p className="text-neutral-500">Driver not found.</p>;
 
@@ -175,7 +177,7 @@ export default function DriverAnalyticsPage() {
               </tr>
             </thead>
             <tbody>
-              {laps.map((l, i) => (
+              {recentFirstLaps.map((l, i) => (
                 <tr key={i} className="border-t border-neutral-100 dark:border-neutral-800">
                   <td className="px-3 py-2">
                     #{l.heatNo}
