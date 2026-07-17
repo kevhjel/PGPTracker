@@ -2,9 +2,9 @@ import { useMemo, useState } from "react";
 import { useQuery } from "convex/react";
 import { Link } from "react-router-dom";
 import { api } from "../../convex/_generated/api";
-import { formatLapTime } from "../lib/format";
+import { formatDate, formatLapTime } from "../lib/format";
 
-type SortKey = "name" | "bestLap" | "heats" | "laps" | "wins" | "podiums";
+type SortKey = "name" | "bestLap" | "heats" | "laps" | "wins" | "podiums" | "lastHeat";
 type SortDir = "asc" | "desc";
 
 const COLUMNS: { key: SortKey; label: string; align?: "right" }[] = [
@@ -14,6 +14,7 @@ const COLUMNS: { key: SortKey; label: string; align?: "right" }[] = [
   { key: "laps", label: "Laps", align: "right" },
   { key: "wins", label: "Wins", align: "right" },
   { key: "podiums", label: "Podiums", align: "right" },
+  { key: "lastHeat", label: "Last Heat", align: "right" },
 ];
 
 export default function WatchlistPage() {
@@ -55,6 +56,11 @@ export default function WatchlistPage() {
           return dir * (a.totalWins - b.totalWins);
         case "podiums":
           return dir * (a.totalPodiums - b.totalPodiums);
+        case "lastHeat": {
+          const av = a.lastHeatDate ?? -Infinity;
+          const bv = b.lastHeatDate ?? -Infinity;
+          return dir * (av - bv);
+        }
       }
     });
   }, [drivers, sortKey, sortDir]);
@@ -63,7 +69,7 @@ export default function WatchlistPage() {
     <div className="space-y-6">
       <h1 className="text-2xl font-bold">Watchlist</h1>
       <p className="text-neutral-500">
-        Drivers followed for quick reference. This is a query-time filter over the full dataset — every driver
+        Drivers followed for quick reference. Every driver
         is tracked and scraped regardless of watchlist status.
       </p>
 
@@ -103,6 +109,18 @@ export default function WatchlistPage() {
                   <td className="px-3 py-2 text-right tabular-nums">{driver.totalLaps}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{driver.totalWins}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{driver.totalPodiums}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {driver.lastSeenHeatNo ? (
+                      <Link
+                        to={`/heats/${driver.lastSeenHeatNo}`}
+                        className="text-blue-600 hover:underline dark:text-blue-400"
+                      >
+                        {formatDate(driver.lastHeatDate)} (#{driver.lastSeenHeatNo})
+                      </Link>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

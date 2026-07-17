@@ -25,10 +25,22 @@ export const getById = query({
 export const listWatched = query({
   args: {},
   handler: async (ctx) => {
-    return await ctx.db
+    const drivers = await ctx.db
       .query("drivers")
       .withIndex("by_watched", (q) => q.eq("isWatched", true))
       .collect();
+
+    return await Promise.all(
+      drivers.map(async (driver) => {
+        const lastHeat = driver.lastSeenHeatNo
+          ? await ctx.db
+              .query("heats")
+              .withIndex("by_heatNo", (q) => q.eq("heatNo", driver.lastSeenHeatNo))
+              .unique()
+          : null;
+        return { ...driver, lastHeatDate: lastHeat?.raceDateTime ?? null };
+      }),
+    );
   },
 });
 
