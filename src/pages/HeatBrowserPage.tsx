@@ -4,6 +4,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api } from "../../convex/_generated/api";
 import { formatDate, formatHeatCategory } from "../lib/format";
 import WetBadge from "../components/WetBadge";
+import VideoBadge from "../components/VideoBadge";
 
 const CATEGORIES = [
   "arrive_and_drive",
@@ -91,6 +92,7 @@ export default function HeatBrowserPage() {
                   <span className="inline-flex items-center gap-2">
                     {formatHeatCategory(heat.heatCategory)}
                     {heat.isWet && <WetBadge ratio={heat.wetnessRatio} />}
+                    {heat.youtubeVideoId && <VideoBadge />}
                   </span>
                 </td>
                 <td className="px-3 py-2">{formatDate(heat.raceDateTime)}</td>

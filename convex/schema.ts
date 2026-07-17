@@ -49,6 +49,8 @@ export default defineSchema({
     isWet: v.optional(v.boolean()),
     wetnessSource: v.optional(v.union(v.literal("auto"), v.literal("admin"))),
     wetClassifiedAt: v.optional(v.number()),
+    youtubeVideoId: v.optional(v.string()),
+    youtubeAddedAt: v.optional(v.number()),
   })
     .index("by_heatNo", ["heatNo"])
     .index("by_status", ["status"])

@@ -8,6 +8,7 @@ import { correctTrackLocalTimestamp } from "./lib/clubspeedParser";
 import { MIN_VALID_LAP_MS } from "./lib/constants";
 import { classifyWetness, MIN_ENTRIES_FOR_CLASSIFICATION } from "./lib/wetDetection";
 import { requireAdmin } from "./lib/adminAuth";
+import { parseYoutubeVideoId } from "./lib/youtube";
 
 const heatCategoryValidator = v.union(
   v.literal("arrive_and_drive"),
@@ -768,5 +769,29 @@ export const clearWetnessOverride = mutation({
       wetnessSource: result ? "auto" : undefined,
       wetClassifiedAt: result ? Date.now() : undefined,
     });
+  },
+});
+
+/** Admin-set YouTube link for a heat. Re-parses and validates the pasted URL
+ * server-side (never trusts client-side validation) and replaces any
+ * existing link. */
+export const setHeatVideo = mutation({
+  args: { heatId: v.id("heats"), url: v.string(), adminSecret: v.string() },
+  handler: async (ctx, { heatId, url, adminSecret }) => {
+    requireAdmin(adminSecret);
+    const videoId = parseYoutubeVideoId(url);
+    if (!videoId) {
+      throw new Error("Couldn't find a valid YouTube video ID in that URL.");
+    }
+    await ctx.db.patch(heatId, { youtubeVideoId: videoId, youtubeAddedAt: Date.now() });
+  },
+});
+
+/** Removes an admin-set YouTube link from a heat. */
+export const clearHeatVideo = mutation({
+  args: { heatId: v.id("heats"), adminSecret: v.string() },
+  handler: async (ctx, { heatId, adminSecret }) => {
+    requireAdmin(adminSecret);
+    await ctx.db.patch(heatId, { youtubeVideoId: undefined, youtubeAddedAt: undefined });
   },
 });

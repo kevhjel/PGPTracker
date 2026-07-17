@@ -6,6 +6,7 @@ import { formatDate, formatGap, formatHeatCategory, formatLapTime } from "../lib
 import GapFromLeaderChart from "../components/GapFromLeaderChart";
 import LapTimesChart from "../components/LapTimesChart";
 import WetBadge from "../components/WetBadge";
+import VideoBadge from "../components/VideoBadge";
 import { seriesColor } from "../lib/chartColors";
 import { useAdminSecret } from "../lib/adminSecret";
 
@@ -18,6 +19,10 @@ export default function HeatDetailPage() {
   const setWetnessOverride = useMutation(api.heats.setWetnessOverride);
   const clearWetnessOverride = useMutation(api.heats.clearWetnessOverride);
   const [wetnessMessage, setWetnessMessage] = useState("");
+  const setHeatVideo = useMutation(api.heats.setHeatVideo);
+  const clearHeatVideo = useMutation(api.heats.clearHeatVideo);
+  const [videoUrlInput, setVideoUrlInput] = useState("");
+  const [videoMessage, setVideoMessage] = useState("");
 
   const driversWithLaps = useMemo(
     () => (data ? data.entries.filter((e) => e.laps.length > 0).map((e) => e.driverNameRaw) : []),
@@ -67,6 +72,7 @@ export default function HeatDetailPage() {
               {formatHeatCategory(heat.heatCategory)} · {heat.rawHeatType} · {formatDate(heat.raceDateTime)}
             </span>
             {heat.isWet && <WetBadge ratio={heat.wetnessRatio} />}
+            {heat.youtubeVideoId && <VideoBadge />}
           </p>
         </div>
         <div className="flex gap-2">
@@ -84,6 +90,61 @@ export default function HeatDetailPage() {
           </button>
         </div>
       </div>
+
+      {heat.youtubeVideoId && (
+        <div className="aspect-video w-full max-w-3xl overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-800">
+          <iframe
+            src={`https://www.youtube-nocookie.com/embed/${heat.youtubeVideoId}`}
+            title={`Heat #${heat.heatNo} video`}
+            className="h-full w-full"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            allowFullScreen
+          />
+        </div>
+      )}
+
+      {secret && (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-neutral-500">Video:</span>
+          <input
+            type="text"
+            value={videoUrlInput}
+            onChange={(e) => setVideoUrlInput(e.target.value)}
+            placeholder="Paste YouTube URL…"
+            className="rounded-md border border-neutral-300 px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-900"
+          />
+          <button
+            onClick={async () => {
+              setVideoMessage("");
+              try {
+                await setHeatVideo({ heatId: heat._id, url: videoUrlInput, adminSecret: secret });
+                setVideoUrlInput("");
+              } catch (err) {
+                setVideoMessage(String(err));
+              }
+            }}
+            className="rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+          >
+            {heat.youtubeVideoId ? "Replace" : "Save"}
+          </button>
+          {heat.youtubeVideoId && (
+            <button
+              onClick={async () => {
+                setVideoMessage("");
+                try {
+                  await clearHeatVideo({ heatId: heat._id, adminSecret: secret });
+                } catch (err) {
+                  setVideoMessage(String(err));
+                }
+              }}
+              className="rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+            >
+              Remove video
+            </button>
+          )}
+          {videoMessage && <span className="text-red-600 dark:text-red-400">{videoMessage}</span>}
+        </div>
+      )}
 
       {secret && heat.status !== "empty" && (
         <div className="flex flex-wrap items-center gap-2 text-sm">
