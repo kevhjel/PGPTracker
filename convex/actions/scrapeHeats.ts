@@ -13,6 +13,16 @@ const REQUEST_DELAY_MS = 400;
 const CONSECUTIVE_MISS_LIMIT = 30;
 const CAUGHT_UP_RESCHEDULE_MS = 3 * 60 * 1000;
 const BACKFILL_RESCHEDULE_MS = 2 * 1000;
+
+// If ClubSpeed pre-reserves a long block of heat numbers (returning "not
+// allocated yet" for far more than CONSECUTIVE_MISS_LIMIT in a row), the
+// batch loop can mistake that block for having caught up to the live edge
+// and keep sailing forward, batch after batch, without ever producing a
+// real "scraped"/"empty" result - silently polling empty space forever
+// instead of the real backlog behind it. If the cursor drifts this far past
+// the last confirmed real heat with zero genuine progress, stop and disable
+// scraping rather than continuing to run away unattended.
+const MAX_LIVE_EDGE_OVERRUN = 1000;
 const EMPTY_RECHECK_RESCHEDULE_MS = 30 * 60 * 1000;
 const EMPTY_RECHECK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const EMPTY_RECHECK_BATCH_SIZE = 100;
@@ -205,12 +215,30 @@ export const scrapeBatch = internalAction({
 
     let consecutiveMisses = 0;
     let processed = 0;
+    let sawRealProgress = false;
     while (processed < BATCH_SIZE && consecutiveMisses < CONSECUTIVE_MISS_LIMIT) {
       const outcome = await scrapeAndStoreHeat(ctx, heatNo);
       consecutiveMisses = outcome === "invalid" ? consecutiveMisses + 1 : 0;
+      if (outcome === "scraped" || outcome === "empty") sawRealProgress = true;
       heatNo++;
       processed++;
       await sleep(REQUEST_DELAY_MS);
+    }
+
+    const stats = await ctx.runQuery(internal.appSettings.statsInternal, {});
+    const overrun = stats ? heatNo - stats.maxHeatNo : 0;
+    if (!sawRealProgress && overrun > MAX_LIVE_EDGE_OVERRUN) {
+      // Cursor has drifted far past the last real heat with nothing to show
+      // for it - stop burning through heat numbers and require a human to
+      // look, instead of polling empty space indefinitely.
+      await ctx.runMutation(internal.heats.logScrapeError, {
+        heatNo,
+        stage: "write",
+        errorMessage: `Auto-paused: cursor overran maxHeatNo by ${overrun} (> ${MAX_LIVE_EDGE_OVERRUN}) with no scraped/empty results in this batch. Backfill cursor left at ${heatNo}.`,
+      });
+      await ctx.runMutation(internal.appSettings.setInternal, { key: "scrapingEnabled", value: false });
+      await ctx.runMutation(internal.appSettings.setInternal, { key: "backfillCursor", value: heatNo });
+      return;
     }
 
     await ctx.runMutation(internal.appSettings.setInternal, { key: "backfillCursor", value: heatNo });

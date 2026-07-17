@@ -62,6 +62,13 @@ export const stats = query({
   },
 });
 
+export const statsInternal = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.db.query("appStats").first();
+  },
+});
+
 /** Side-effect-free check so the UI can confirm a secret is correct the moment it's entered, rather than only failing later on some other admin action. */
 export const verifyAdminSecret = mutation({
   args: { adminSecret: v.string() },
