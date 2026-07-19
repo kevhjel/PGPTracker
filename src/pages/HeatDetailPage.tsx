@@ -283,7 +283,7 @@ export default function HeatDetailPage() {
 
           <div>
             <h2 className="text-lg font-semibold mb-3">Lap times</h2>
-            <LapTimesChart entries={entries} selectedNames={selectedNames} />
+            <LapTimesChart entries={entries} selectedNames={selectedNames} heatCategory={heat.heatCategory} />
           </div>
         </>
       )}
