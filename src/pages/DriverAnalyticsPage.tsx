@@ -17,6 +17,63 @@ import { formatDate, formatLapTime } from "../lib/format";
 
 const MOVING_AVG_WINDOW = 15;
 
+interface LapPoint {
+  x: number;
+  heatNo: number;
+  raceDateTime: number;
+}
+
+interface LapTooltipPayloadEntry {
+  dataKey?: string;
+  value?: number;
+  color?: string;
+  payload?: LapPoint;
+}
+
+// Recharts' Scatter emits an extra tooltip row for its own x-coordinate
+// (shows up as a bare "x" row) that the simple `formatter` prop on <Tooltip>
+// can't suppress - it can only relabel rows, not drop them. Rendering the
+// tooltip content ourselves lets us allowlist exactly the rows we want.
+function LapTooltipContent({ active, payload }: { active?: boolean; payload?: LapTooltipPayloadEntry[] }) {
+  if (!active || !payload || payload.length === 0) return null;
+  const point = payload[0].payload;
+  const order = ["lapTimeSec", "movingAvgSec", "trendSec"];
+  const rows = [...payload]
+    .sort((a, b) => order.indexOf(a.dataKey ?? "") - order.indexOf(b.dataKey ?? ""))
+    .map((p) => {
+      const label =
+        p.dataKey === "lapTimeSec"
+          ? `Lap ${point?.x ?? ""}`
+          : p.dataKey === "movingAvgSec"
+            ? "Moving avg"
+            : p.dataKey === "trendSec"
+              ? "Trend"
+              : null;
+      if (label === null || p.value === undefined) return null;
+      return { label, text: `${p.value.toFixed(3)}s`, color: p.color };
+    })
+    .filter((r): r is { label: string; text: string; color?: string } => r !== null);
+
+  return (
+    <div
+      style={{
+        background: "var(--chart-surface)",
+        border: "1px solid var(--chart-gridline)",
+        fontSize: 12,
+        padding: "8px 10px",
+        borderRadius: 4,
+      }}
+    >
+      {point && <div className="mb-1">{`Heat #${point.heatNo} · ${formatDate(point.raceDateTime)}`}</div>}
+      {rows.map((r) => (
+        <div key={r.label} style={{ color: r.color }}>
+          {r.label}: {r.text}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function quantile(sorted: number[], q: number): number {
   const pos = (sorted.length - 1) * q;
   const base = Math.floor(pos);
@@ -91,6 +148,27 @@ export default function DriverAnalyticsPage() {
     return points;
   }, [laps, hideOutlap, hideWet, removeOutliers, showMovingAvg, showTrendline]);
 
+  // Robust Y-axis bounds: a full-range domain gets stretched by rare,
+  // extreme-outlier laps (endurance-race pit stops can be several times a
+  // normal lap), which flattens the visible variation in genuine racing
+  // pace. Tukey's fences (same IQR technique as the "Remove outliers"
+  // filter above, but applied to the axis scale rather than the dataset)
+  // zoom the view to where the real lap times live; pit-stop-length laps
+  // still plot, just clipped above the visible range instead of dictating
+  // the whole scale.
+  const yDomain = useMemo<[number, number] | undefined>(() => {
+    if (chartData.length < 4) return undefined;
+    const sorted = chartData.map((p) => p.lapTimeSec).sort((a, b) => a - b);
+    const q1 = quantile(sorted, 0.25);
+    const q3 = quantile(sorted, 0.75);
+    const iqr = q3 - q1;
+    const dataMin = sorted[0];
+    const dataMax = sorted[sorted.length - 1];
+    const lo = Math.max(q1 - 1.5 * iqr, dataMin);
+    const hi = Math.min(q3 + 1.5 * iqr, dataMax);
+    return [Math.max(0, lo - 1), hi + 1];
+  }, [chartData]);
+
   const recentFirstLaps = useMemo(() => (laps ? [...laps].reverse() : []), [laps]);
 
   if (driver === undefined || laps === undefined) return <p className="text-neutral-500">Loading…</p>;
@@ -124,7 +202,7 @@ export default function DriverAnalyticsPage() {
       </div>
 
       <ResponsiveContainer width="100%" height={420}>
-        <ComposedChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+        <ComposedChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 24 }}>
           <CartesianGrid stroke="var(--chart-gridline)" vertical={false} />
           <XAxis
             dataKey="x"
@@ -135,30 +213,12 @@ export default function DriverAnalyticsPage() {
           <YAxis
             stroke="var(--chart-muted)"
             tick={{ fill: "var(--chart-muted)", fontSize: 12 }}
-            domain={["dataMin - 1", "dataMax + 1"]}
+            domain={yDomain ?? ["dataMin - 1", "dataMax + 1"]}
             label={{ value: "Lap time (s)", angle: -90, position: "insideLeft", fill: "var(--chart-muted)" }}
           />
-          <Tooltip
-            contentStyle={{
-              background: "var(--chart-surface)",
-              border: "1px solid var(--chart-gridline)",
-              fontSize: 12,
-            }}
-            formatter={(value, name) => {
-              const v = Number(value);
-              return [
-                name === "lapTimeSec" ? formatLapTime(v * 1000) : `${v.toFixed(3)}s`,
-                name === "lapTimeSec" ? "Lap time" : name === "movingAvgSec" ? "Moving avg" : "Trend",
-              ];
-            }}
-            labelFormatter={(_, payload) =>
-              payload?.[0]?.payload ? `Heat #${payload[0].payload.heatNo} · ${formatDate(payload[0].payload.raceDateTime)}` : ""
-            }
-          />
+          <Tooltip content={<LapTooltipContent />} />
           <Scatter dataKey="lapTimeSec" fill="var(--series-1)" opacity={0.6} />
-          {showMovingAvg && (
-            <Line dataKey="movingAvgSec" stroke="var(--series-2)" strokeWidth={2} dot={false} />
-          )}
+          {showMovingAvg && <Line dataKey="movingAvgSec" stroke="var(--series-2)" strokeWidth={2} dot={false} />}
           {showTrendline && (
             <Line dataKey="trendSec" stroke="var(--series-6)" strokeWidth={2} strokeDasharray="6 4" dot={false} />
           )}
