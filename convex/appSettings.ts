@@ -55,6 +55,36 @@ export const setInternal = internalMutation({
   },
 });
 
+/**
+ * Admin-only: move the backfill cursor. Sets both confirmedHeatCursor (the
+ * value shown on the admin page - "last heat with confirmed data") and
+ * scanHeatCursor (where the scan loop physically resumes probing) to the
+ * same value, so the edit actually takes effect on the next batch instead of
+ * being silently overwritten by an already-further-ahead scan position.
+ * Safe to rewind: upsertHeat (heats.ts) is idempotent, so re-probing already-
+ * seen heat numbers just re-patches the same docs.
+ */
+export const setBackfillCursor = mutation({
+  args: { heatNo: v.number(), adminSecret: v.string() },
+  handler: async (ctx, { heatNo, adminSecret }) => {
+    requireAdmin(adminSecret);
+    if (!Number.isInteger(heatNo) || heatNo < 1) {
+      throw new Error("Heat number must be a positive integer.");
+    }
+    for (const key of ["confirmedHeatCursor", "scanHeatCursor"]) {
+      const row = await ctx.db
+        .query("appSettings")
+        .withIndex("by_key", (q) => q.eq("key", key))
+        .unique();
+      if (row) {
+        await ctx.db.patch(row._id, { value: heatNo });
+      } else {
+        await ctx.db.insert("appSettings", { key, value: heatNo });
+      }
+    }
+  },
+});
+
 export const stats = query({
   args: {},
   handler: async (ctx) => {

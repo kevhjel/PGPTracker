@@ -48,6 +48,29 @@ export const listRecent = query({
   },
 });
 
+/**
+ * One-time migration helper for the confirmedHeatCursor/scanHeatCursor split
+ * (see scrapeHeats.ts's scrapeBatch). Steps backward one heatNo at a time via
+ * the by_heatNo index (cheap point lookups, not a table scan) looking for the
+ * last heat actually confirmed "scraped", bounded so it can never turn into
+ * an unbounded scan. Only ever called once per deployment, right before the
+ * new cursor keys are seeded for the first time.
+ */
+export const findLastScrapedHeatNoBefore = internalQuery({
+  args: { notAfter: v.number(), maxStepsBack: v.number() },
+  handler: async (ctx, { notAfter, maxStepsBack }) => {
+    const floor = Math.max(1, notAfter - maxStepsBack);
+    for (let n = notAfter; n >= floor; n--) {
+      const heat = await ctx.db
+        .query("heats")
+        .withIndex("by_heatNo", (q) => q.eq("heatNo", n))
+        .unique();
+      if (heat?.status === "scraped") return n;
+    }
+    return null;
+  },
+});
+
 export const listEmptyForRecheck = internalQuery({
   args: { maxAgeMs: v.number(), limit: v.number() },
   handler: async (ctx, { maxAgeMs, limit }) => {

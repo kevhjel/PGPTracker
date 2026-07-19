@@ -13,12 +13,17 @@ export default function AdminScrapeHealthPage() {
   const [heatNoInput, setHeatNoInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [cursorInput, setCursorInput] = useState("");
+  const [cursorBusy, setCursorBusy] = useState(false);
+  const [cursorMessage, setCursorMessage] = useState("");
 
   const scrapingEnabled = useQuery(api.appSettings.get, { key: "scrapingEnabled" });
-  const backfillCursor = useQuery(api.appSettings.get, { key: "backfillCursor" });
+  const confirmedHeatCursor = useQuery(api.appSettings.get, { key: "confirmedHeatCursor" });
+  const scanHeatCursor = useQuery(api.appSettings.get, { key: "scanHeatCursor" });
   const errors = useQuery(api.heats.listRecentErrors, { limit: 25 });
 
   const setSetting = useMutation(api.appSettings.set);
+  const setBackfillCursor = useMutation(api.appSettings.setBackfillCursor);
   const verifyAdminSecret = useMutation(api.appSettings.verifyAdminSecret);
   const adminScrapeHeat = useAction(api.actions.scrapeHeats.adminScrapeHeat);
   const adminRunBatchNow = useAction(api.actions.scrapeHeats.adminRunBatchNow);
@@ -58,6 +63,22 @@ export default function AdminScrapeHealthPage() {
       setMessage(String(err));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const saveCursor = async () => {
+    const n = parseInt(cursorInput, 10);
+    if (!Number.isFinite(n)) return;
+    setCursorBusy(true);
+    setCursorMessage("");
+    try {
+      await setBackfillCursor({ heatNo: n, adminSecret: secret });
+      setCursorMessage(`Cursor set to heat #${n}.`);
+      setCursorInput("");
+    } catch (err) {
+      setCursorMessage(String(err));
+    } finally {
+      setCursorBusy(false);
     }
   };
 
@@ -127,8 +148,29 @@ export default function AdminScrapeHealthPage() {
         <div className="rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
           <div className="text-sm text-neutral-500">Backfill cursor</div>
           <div className="mt-1 font-semibold tabular-nums">
-            {typeof backfillCursor === "number" ? `Heat #${backfillCursor}` : "Not started"}
+            {typeof confirmedHeatCursor === "number" ? `Heat #${confirmedHeatCursor}` : "Not started"}
           </div>
+          <div className="mt-0.5 text-xs text-neutral-400">
+            Scan position: {typeof scanHeatCursor === "number" ? `#${scanHeatCursor}` : "—"} (may run ahead
+            while probing pre-scheduled future heats)
+          </div>
+          <div className="mt-2 flex gap-2">
+            <input
+              type="number"
+              value={cursorInput}
+              onChange={(e) => setCursorInput(e.target.value)}
+              placeholder="New heat #"
+              className="w-28 rounded-md border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+            />
+            <button
+              onClick={saveCursor}
+              disabled={cursorBusy}
+              className="rounded-md border border-neutral-300 px-2 py-1 text-sm hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+            >
+              Set
+            </button>
+          </div>
+          {cursorMessage && <p className="mt-1 text-xs text-neutral-500">{cursorMessage}</p>}
         </div>
       </div>
 

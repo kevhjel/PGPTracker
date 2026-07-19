@@ -18,6 +18,7 @@ import type * as lib_adminAuth from "../lib/adminAuth.js";
 import type * as lib_clubspeedParser from "../lib/clubspeedParser.js";
 import type * as lib_constants from "../lib/constants.js";
 import type * as lib_heatType from "../lib/heatType.js";
+import type * as lib_trackSchedule from "../lib/trackSchedule.js";
 import type * as lib_wetDetection from "../lib/wetDetection.js";
 import type * as lib_youtube from "../lib/youtube.js";
 import type * as wetDetection from "../wetDetection.js";
@@ -39,6 +40,7 @@ declare const fullApi: ApiFromModules<{
   "lib/clubspeedParser": typeof lib_clubspeedParser;
   "lib/constants": typeof lib_constants;
   "lib/heatType": typeof lib_heatType;
+  "lib/trackSchedule": typeof lib_trackSchedule;
   "lib/wetDetection": typeof lib_wetDetection;
   "lib/youtube": typeof lib_youtube;
   wetDetection: typeof wetDetection;

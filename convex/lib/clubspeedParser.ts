@@ -23,7 +23,7 @@ function isPacificDst(year: number, month: number, day: number): boolean {
   return day < nthSundayOfMonth(year, 11, 1); // month === 11
 }
 
-function pacificOffsetMinutes(year: number, month: number, day: number): number {
+export function pacificOffsetMinutes(year: number, month: number, day: number): number {
   return isPacificDst(year, month, day) ? -420 : -480; // PDT: UTC-7, PST: UTC-8
 }
 

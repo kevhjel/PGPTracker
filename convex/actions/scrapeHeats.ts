@@ -7,12 +7,21 @@ import type { ActionCtx } from "../_generated/server";
 import { CLUBSPEED_BASE, parseHeatDetailsHtml } from "../lib/clubspeedParser";
 import { categorizeHeatType } from "../lib/heatType";
 import { requireAdmin } from "../lib/adminAuth";
+import { isTrackScheduledOpen, msUntilNextScheduledOpen } from "../lib/trackSchedule";
 
 const BATCH_SIZE = 50;
 const REQUEST_DELAY_MS = 400;
 const CONSECUTIVE_MISS_LIMIT = 30;
 const CAUGHT_UP_RESCHEDULE_MS = 3 * 60 * 1000;
 const BACKFILL_RESCHEDULE_MS = 2 * 1000;
+
+// Once the live edge is reached outside scheduled operating hours (see
+// trackSchedule.ts), sleep until shortly before the track is expected to
+// reopen instead of polling every CAUGHT_UP_RESCHEDULE_MS the whole time -
+// but never in a single hop longer than this cap, so a multi-day holiday
+// closure is walked in bounded hops rather than one long sleep (see
+// SCRAPE_CHAIN_STALE_MS below for why the cap matters).
+const CLOSED_RESCHEDULE_MS = 30 * 60 * 1000;
 
 // If ClubSpeed pre-reserves a long block of heat numbers (returning "not
 // allocated yet" for far more than CONSECUTIVE_MISS_LIMIT in a row), the
@@ -32,8 +41,12 @@ const MISS_RECHECK_BATCH_SIZE = 200;
 
 // A batch can take longer than expected under network/retry pressure; give
 // it a generous margin before another caller is allowed to treat it as dead.
+// Must comfortably exceed CLOSED_RESCHEDULE_MS - otherwise the hourly cron
+// watchdog would see a stale heartbeat mid-closure (while scrapeBatch is
+// deliberately sleeping through a known-closed window) and spawn a
+// duplicate chain.
 const SCRAPE_CHAIN_KEY = "scrapeBatchChain";
-const SCRAPE_CHAIN_STALE_MS = 3 * 60 * 1000;
+const SCRAPE_CHAIN_STALE_MS = 40 * 60 * 1000;
 const EMPTY_RECHECK_CHAIN_KEY = "recheckEmptyHeatsChain";
 const EMPTY_RECHECK_CHAIN_STALE_MS = 10 * 60 * 1000;
 const MISS_RECHECK_CHAIN_KEY = "recheckMissedHeatsChain";
@@ -41,6 +54,35 @@ const MISS_RECHECK_CHAIN_STALE_MS = 10 * 60 * 1000;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Hybrid cadence: once the batch loop has caught up to the live edge (a run
+// of CONSECUTIVE_MISS_LIMIT straight "not allocated yet" responses), decide
+// how long to wait before checking again. If the track is scheduled open
+// right now, keep the existing fast-ish poll (CAUGHT_UP_RESCHEDULE_MS).
+// Otherwise, sleep towards the next scheduled opening, but never longer than
+// CLOSED_RESCHEDULE_MS in one hop - a multi-day holiday closure is walked in
+// bounded hops rather than one long sleep, and the consecutive-miss/empty
+// detection in scrapeBatch remains the authoritative safety net for any
+// closure this calendar model doesn't know about (irregular dark days,
+// unexpected reopenings, etc).
+function computeCaughtUpDelayMs(now: number): number {
+  if (isTrackScheduledOpen(now)) return CAUGHT_UP_RESCHEDULE_MS;
+  return Math.min(CLOSED_RESCHEDULE_MS, msUntilNextScheduledOpen(now));
+}
+
+// recheckEmptyHeats/recheckMissedHeats can resolve a heat to "scraped" out of
+// order (a heatNo scrapeBatch has already scanned past and moved on from).
+// Bump confirmedHeatCursor when that happens so the admin-facing "last heat
+// with data" value stays accurate - never decreases it, only raises it.
+async function maybeBumpConfirmedCursor(ctx: ActionCtx, scrapedHeatNo: number): Promise<void> {
+  const current = await ctx.runQuery(internal.appSettings.getInternal, { key: "confirmedHeatCursor" });
+  if (typeof current === "number" && scrapedHeatNo + 1 > current) {
+    await ctx.runMutation(internal.appSettings.setInternal, {
+      key: "confirmedHeatCursor",
+      value: scrapedHeatNo + 1,
+    });
+  }
 }
 
 type ScrapeOutcome = "scraped" | "empty" | "invalid" | "error";
@@ -178,8 +220,17 @@ export const adminRunBatchNow = action({
 /**
  * Self-rescheduling batch loop. Doubles as both the historical backfill
  * (fast cadence while there's still a backlog of un-scraped heat numbers)
- * and the ongoing live poll (slow cadence once it hits a run of consecutive
- * "not allocated yet" responses, i.e. it has caught up to the present).
+ * and the ongoing live poll (schedule-aware cadence once it hits a run of
+ * consecutive "not allocated yet" responses, i.e. it has caught up to the
+ * present - see computeCaughtUpDelayMs).
+ *
+ * Tracks two positions in appSettings: `scanHeatCursor` (next heatNo to
+ * physically probe - advances every batch regardless of outcome, so it can
+ * run ahead through blocks of pre-allocated "empty"/"invalid" heats) and
+ * `confirmedHeatCursor` (last heat with confirmed "scraped" data, + 1 - the
+ * value the admin page shows/edits). Only `confirmedHeatCursor` is meant to
+ * be trusted as "where real data ends"; `scanHeatCursor` is purely an
+ * internal resume point.
  *
  * Guarded by an owner-token lock (see appSettings.claimChainIfIdle) so that
  * a fresh trigger - the cron watchdog, a redeploy re-firing that watchdog,
@@ -210,45 +261,75 @@ export const scrapeBatch = internalAction({
       if (!claimed) return; // a live chain already owns this; don't run a duplicate
     }
 
-    const cursorValue = await ctx.runQuery(internal.appSettings.getInternal, { key: "backfillCursor" });
-    let heatNo = typeof cursorValue === "number" ? cursorValue : 1;
+    // confirmedHeatCursor = last heat with confirmed "scraped" data, + 1.
+    // This is the value the admin sees/edits. scanHeatCursor = next heatNo to
+    // physically probe - free to run ahead of confirmedHeatCursor through
+    // blocks of pre-allocated "empty"/"invalid" heats without dragging the
+    // confirmed value with it (that was the old bug: a single unconditional
+    // cursor could overshoot past the last real data into speculative future
+    // territory). One-time self-migration from the legacy single-key
+    // "backfillCursor" the first time either new key is missing.
+    let confirmed = await ctx.runQuery(internal.appSettings.getInternal, { key: "confirmedHeatCursor" });
+    let scan = await ctx.runQuery(internal.appSettings.getInternal, { key: "scanHeatCursor" });
+    if (typeof confirmed !== "number" || typeof scan !== "number") {
+      const legacyValue = await ctx.runQuery(internal.appSettings.getInternal, { key: "backfillCursor" });
+      const legacyCursor = typeof legacyValue === "number" ? legacyValue : 1;
+      if (typeof scan !== "number") scan = legacyCursor;
+      if (typeof confirmed !== "number") {
+        const found = await ctx.runQuery(internal.heats.findLastScrapedHeatNoBefore, {
+          notAfter: legacyCursor,
+          maxStepsBack: MAX_LIVE_EDGE_OVERRUN * 2,
+        });
+        confirmed = found !== null ? found + 1 : legacyCursor;
+      }
+      await ctx.runMutation(internal.appSettings.setInternal, { key: "scanHeatCursor", value: scan });
+      await ctx.runMutation(internal.appSettings.setInternal, { key: "confirmedHeatCursor", value: confirmed });
+    }
+    const confirmedAtStart: number = confirmed;
+    let heatNo = scan;
 
     let consecutiveMisses = 0;
     let processed = 0;
     let sawRealProgress = false;
+    let lastScrapedHeatNo: number | null = null;
     while (processed < BATCH_SIZE && consecutiveMisses < CONSECUTIVE_MISS_LIMIT) {
       const outcome = await scrapeAndStoreHeat(ctx, heatNo);
       consecutiveMisses = outcome === "invalid" ? consecutiveMisses + 1 : 0;
       if (outcome === "scraped" || outcome === "empty") sawRealProgress = true;
+      if (outcome === "scraped") lastScrapedHeatNo = heatNo;
       heatNo++;
       processed++;
       await sleep(REQUEST_DELAY_MS);
     }
 
-    const stats = await ctx.runQuery(internal.appSettings.statsInternal, {});
-    const overrun = stats ? heatNo - stats.maxHeatNo : 0;
+    const overrun = heatNo - confirmedAtStart;
     if (!sawRealProgress && overrun > MAX_LIVE_EDGE_OVERRUN) {
-      // Cursor has drifted far past the last real heat with nothing to show
-      // for it - stop burning through heat numbers and require a human to
-      // look, instead of polling empty space indefinitely.
+      // Scan has drifted far past the last confirmed real heat with nothing
+      // to show for it - stop burning through heat numbers and require a
+      // human to look, instead of polling empty space indefinitely. Only the
+      // scan position moves here; confirmedHeatCursor is left untouched so
+      // the admin-facing value stays trustworthy while paused.
       await ctx.runMutation(internal.heats.logScrapeError, {
         heatNo,
         stage: "write",
-        errorMessage: `Auto-paused: cursor overran maxHeatNo by ${overrun} (> ${MAX_LIVE_EDGE_OVERRUN}) with no scraped/empty results in this batch. Backfill cursor left at ${heatNo}.`,
+        errorMessage: `Auto-paused: scan cursor overran confirmed data by ${overrun} (> ${MAX_LIVE_EDGE_OVERRUN}) with no scraped/empty results in this batch. Scan cursor left at ${heatNo}; confirmed cursor still at ${confirmedAtStart}.`,
       });
       await ctx.runMutation(internal.appSettings.setInternal, { key: "scrapingEnabled", value: false });
-      await ctx.runMutation(internal.appSettings.setInternal, { key: "backfillCursor", value: heatNo });
+      await ctx.runMutation(internal.appSettings.setInternal, { key: "scanHeatCursor", value: heatNo });
       return;
     }
 
-    await ctx.runMutation(internal.appSettings.setInternal, { key: "backfillCursor", value: heatNo });
+    await ctx.runMutation(internal.appSettings.setInternal, { key: "scanHeatCursor", value: heatNo });
+    if (lastScrapedHeatNo !== null && lastScrapedHeatNo + 1 > confirmedAtStart) {
+      await ctx.runMutation(internal.appSettings.setInternal, {
+        key: "confirmedHeatCursor",
+        value: lastScrapedHeatNo + 1,
+      });
+    }
 
     const reachedLiveEdge = consecutiveMisses >= CONSECUTIVE_MISS_LIMIT;
-    await ctx.scheduler.runAfter(
-      reachedLiveEdge ? CAUGHT_UP_RESCHEDULE_MS : BACKFILL_RESCHEDULE_MS,
-      internal.actions.scrapeHeats.scrapeBatch,
-      { chainToken: myToken },
-    );
+    const delayMs = reachedLiveEdge ? computeCaughtUpDelayMs(Date.now()) : BACKFILL_RESCHEDULE_MS;
+    await ctx.scheduler.runAfter(delayMs, internal.actions.scrapeHeats.scrapeBatch, { chainToken: myToken });
   },
 });
 
@@ -286,7 +367,8 @@ export const recheckEmptyHeats = internalAction({
     });
 
     for (const heat of emptyHeats) {
-      await scrapeAndStoreHeat(ctx, heat.heatNo);
+      const outcome = await scrapeAndStoreHeat(ctx, heat.heatNo);
+      if (outcome === "scraped") await maybeBumpConfirmedCursor(ctx, heat.heatNo);
       await sleep(REQUEST_DELAY_MS);
     }
 
@@ -339,7 +421,8 @@ export const recheckMissedHeats = internalAction({
         await ctx.runMutation(internal.heats.clearMiss, { heatNo: miss.heatNo });
         continue;
       }
-      await scrapeAndStoreHeat(ctx, miss.heatNo);
+      const outcome = await scrapeAndStoreHeat(ctx, miss.heatNo);
+      if (outcome === "scraped") await maybeBumpConfirmedCursor(ctx, miss.heatNo);
       await sleep(REQUEST_DELAY_MS);
     }
 
