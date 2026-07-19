@@ -22,9 +22,13 @@ export default function LapTimesChart({
   entries: EntryLike[];
   selectedNames?: Set<string>;
 }) {
-  const withLaps = entries.filter(
-    (e) => e.laps.length > 0 && (!selectedNames || selectedNames.has(e.driverNameRaw)),
-  );
+  // Skip the out lap (lap 1) - it's run well below race pace, which
+  // compresses the rest of the laps at the bottom of the chart and makes
+  // individual lap times hard to read.
+  const withLaps = entries
+    .filter((e) => !selectedNames || selectedNames.has(e.driverNameRaw))
+    .map((e) => ({ ...e, laps: e.laps.filter((l) => l.lapNo > 1) }))
+    .filter((e) => e.laps.length > 0);
   if (withLaps.length === 0) {
     return (
       <p className="text-sm text-neutral-500">
@@ -38,7 +42,7 @@ export default function LapTimesChart({
 
   const chartData = [];
   for (let lap = 0; lap < maxLaps; lap++) {
-    const row: Record<string, number> = { lap: lap + 1 };
+    const row: Record<string, number> = { lap: lap + 2 };
     withLaps.forEach((e, i) => {
       const entry = sortedLapsByDriver[i][lap];
       if (entry !== undefined) {
