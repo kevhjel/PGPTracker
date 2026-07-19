@@ -40,6 +40,42 @@ export const set = mutation({
   },
 });
 
+/**
+ * Admin-only: toggle scraping on/off. When disabling, also releases all
+ * three self-rescheduling loops' chain locks immediately - otherwise a
+ * quick disable-then-re-enable leaves a lock "fresh" with nothing left to
+ * ever refresh its heartbeat, forcing a resume to wait out the full
+ * SCRAPE_CHAIN_STALE_MS-style staleness window before it can reclaim the
+ * chain (see convex/actions/scrapeHeats.ts). This is the fast, immediate
+ * path; each loop also independently releases its own lock the next time
+ * it runs and sees scraping disabled (e.g. after the overrun auto-pause,
+ * which doesn't go through this mutation), bounded to at most an hour by
+ * the cron watchdog.
+ */
+export const setScrapingEnabled = mutation({
+  args: { enabled: v.boolean(), adminSecret: v.string() },
+  handler: async (ctx, { enabled, adminSecret }) => {
+    requireAdmin(adminSecret);
+    const setKey = async (key: string, value: unknown) => {
+      const row = await ctx.db
+        .query("appSettings")
+        .withIndex("by_key", (q) => q.eq("key", key))
+        .unique();
+      if (row) {
+        await ctx.db.patch(row._id, { value });
+      } else {
+        await ctx.db.insert("appSettings", { key, value });
+      }
+    };
+    await setKey("scrapingEnabled", enabled);
+    if (!enabled) {
+      await setKey("scrapeBatchChain", null);
+      await setKey("recheckEmptyHeatsChain", null);
+      await setKey("recheckMissedHeatsChain", null);
+    }
+  },
+});
+
 export const setInternal = internalMutation({
   args: { key: v.string(), value: v.any() },
   handler: async (ctx, { key, value }) => {

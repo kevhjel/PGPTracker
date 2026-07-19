@@ -22,7 +22,7 @@ export default function AdminScrapeHealthPage() {
   const scanHeatCursor = useQuery(api.appSettings.get, { key: "scanHeatCursor" });
   const errors = useQuery(api.heats.listRecentErrors, { limit: 25 });
 
-  const setSetting = useMutation(api.appSettings.set);
+  const setScrapingEnabled = useMutation(api.appSettings.setScrapingEnabled);
   const setBackfillCursor = useMutation(api.appSettings.setBackfillCursor);
   const verifyAdminSecret = useMutation(api.appSettings.verifyAdminSecret);
   const adminScrapeHeat = useAction(api.actions.scrapeHeats.adminScrapeHeat);
@@ -43,7 +43,7 @@ export default function AdminScrapeHealthPage() {
     setBusy(true);
     setMessage("");
     try {
-      await setSetting({ key: "scrapingEnabled", value: !(scrapingEnabled ?? true), adminSecret: secret });
+      await setScrapingEnabled({ enabled: !(scrapingEnabled ?? true), adminSecret: secret });
     } catch (err) {
       setMessage(String(err));
     } finally {
