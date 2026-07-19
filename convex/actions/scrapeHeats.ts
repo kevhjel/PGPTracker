@@ -12,7 +12,10 @@ import { isTrackScheduledOpen, msUntilNextScheduledOpen } from "../lib/trackSche
 const BATCH_SIZE = 50;
 const REQUEST_DELAY_MS = 400;
 const CONSECUTIVE_MISS_LIMIT = 30;
-const CAUGHT_UP_RESCHEDULE_MS = 3 * 60 * 1000;
+// Real heats show up at most about once every 15 minutes even at the
+// busiest times, so once caught up to the live edge during scheduled-open
+// hours there's no benefit to checking more often than this.
+const CAUGHT_UP_RESCHEDULE_MS = 30 * 60 * 1000;
 const BACKFILL_RESCHEDULE_MS = 2 * 1000;
 
 // Once the live edge is reached outside scheduled operating hours (see
@@ -20,8 +23,10 @@ const BACKFILL_RESCHEDULE_MS = 2 * 1000;
 // reopen instead of polling every CAUGHT_UP_RESCHEDULE_MS the whole time -
 // but never in a single hop longer than this cap, so a multi-day holiday
 // closure is walked in bounded hops rather than one long sleep (see
-// SCRAPE_CHAIN_STALE_MS below for why the cap matters).
-const CLOSED_RESCHEDULE_MS = 30 * 60 * 1000;
+// SCRAPE_CHAIN_STALE_MS below for why the cap matters). We have very high
+// confidence there's no data during a scheduled-closed window, so this can
+// be much longer than the open-hours cadence.
+const CLOSED_RESCHEDULE_MS = 12 * 60 * 60 * 1000;
 
 // If ClubSpeed pre-reserves a long block of heat numbers (returning "not
 // allocated yet" for far more than CONSECUTIVE_MISS_LIMIT in a row), the
@@ -46,7 +51,7 @@ const MISS_RECHECK_BATCH_SIZE = 200;
 // deliberately sleeping through a known-closed window) and spawn a
 // duplicate chain.
 const SCRAPE_CHAIN_KEY = "scrapeBatchChain";
-const SCRAPE_CHAIN_STALE_MS = 40 * 60 * 1000;
+const SCRAPE_CHAIN_STALE_MS = 13 * 60 * 60 * 1000;
 const EMPTY_RECHECK_CHAIN_KEY = "recheckEmptyHeatsChain";
 const EMPTY_RECHECK_CHAIN_STALE_MS = 10 * 60 * 1000;
 const MISS_RECHECK_CHAIN_KEY = "recheckMissedHeatsChain";
@@ -242,7 +247,14 @@ export const scrapeBatch = internalAction({
   args: { chainToken: v.optional(v.string()) },
   handler: async (ctx, { chainToken }) => {
     const enabled = await ctx.runQuery(internal.appSettings.getInternal, { key: "scrapingEnabled" });
-    if (enabled === false) return;
+    if (enabled === false) {
+      // Release the lock while paused so a future resume can claim it
+      // immediately - nothing continues to refresh this heartbeat once
+      // paused, so waiting out SCRAPE_CHAIN_STALE_MS against a frozen
+      // timestamp could otherwise delay a resume by hours.
+      await ctx.runMutation(internal.appSettings.setInternal, { key: SCRAPE_CHAIN_KEY, value: null });
+      return;
+    }
 
     let myToken = chainToken;
     if (myToken) {
@@ -286,6 +298,19 @@ export const scrapeBatch = internalAction({
       await ctx.runMutation(internal.appSettings.setInternal, { key: "confirmedHeatCursor", value: confirmed });
     }
     const confirmedAtStart: number = confirmed;
+    // Once scanHeatCursor is already well past the confirmed frontier with
+    // nothing to show for it, there's nothing to gain by continuing to push
+    // it forward into never-before-tried territory on every idle cycle -
+    // ClubSpeed assigns heat numbers sequentially, so the next real heat
+    // (whenever it's created) will always be the earliest unresolved number,
+    // not whatever number scanHeatCursor has since wandered up to. Clamp
+    // back down so repeated caught-up cycles re-check the same small window
+    // at the frontier forever instead of creeping the overrun budget forward
+    // indefinitely; recheckMissedHeats independently retries the full
+    // accumulated backlog (including this same window) on its own cadence.
+    if (scan > confirmedAtStart + CONSECUTIVE_MISS_LIMIT) {
+      scan = confirmedAtStart;
+    }
     let heatNo = scan;
 
     let consecutiveMisses = 0;
@@ -342,7 +367,10 @@ export const recheckEmptyHeats = internalAction({
   args: { chainToken: v.optional(v.string()) },
   handler: async (ctx, { chainToken }) => {
     const enabled = await ctx.runQuery(internal.appSettings.getInternal, { key: "scrapingEnabled" });
-    if (enabled === false) return;
+    if (enabled === false) {
+      await ctx.runMutation(internal.appSettings.setInternal, { key: EMPTY_RECHECK_CHAIN_KEY, value: null });
+      return;
+    }
 
     let myToken = chainToken;
     if (myToken) {
@@ -392,7 +420,10 @@ export const recheckMissedHeats = internalAction({
   args: { chainToken: v.optional(v.string()) },
   handler: async (ctx, { chainToken }) => {
     const enabled = await ctx.runQuery(internal.appSettings.getInternal, { key: "scrapingEnabled" });
-    if (enabled === false) return;
+    if (enabled === false) {
+      await ctx.runMutation(internal.appSettings.setInternal, { key: MISS_RECHECK_CHAIN_KEY, value: null });
+      return;
+    }
 
     let myToken = chainToken;
     if (myToken) {
