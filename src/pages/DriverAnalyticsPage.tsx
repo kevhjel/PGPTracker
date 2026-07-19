@@ -40,7 +40,7 @@ function LapTooltipContent({ active, payload }: { active?: boolean; payload?: La
   const order = ["lapTimeSec", "movingAvgSec", "trendSec"];
   const rows = [...payload]
     .sort((a, b) => order.indexOf(a.dataKey ?? "") - order.indexOf(b.dataKey ?? ""))
-    .map((p) => {
+    .flatMap((p) => {
       const label =
         p.dataKey === "lapTimeSec"
           ? `Lap ${point?.x ?? ""}`
@@ -49,10 +49,9 @@ function LapTooltipContent({ active, payload }: { active?: boolean; payload?: La
             : p.dataKey === "trendSec"
               ? "Trend"
               : null;
-      if (label === null || p.value === undefined) return null;
-      return { label, text: `${p.value.toFixed(3)}s`, color: p.color };
-    })
-    .filter((r): r is { label: string; text: string; color?: string } => r !== null);
+      if (label === null || p.value === undefined) return [];
+      return [{ label, text: `${p.value.toFixed(3)}s`, color: p.color }];
+    });
 
   return (
     <div
