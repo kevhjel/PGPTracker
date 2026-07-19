@@ -213,6 +213,7 @@ export default function DriverAnalyticsPage() {
             stroke="var(--chart-muted)"
             tick={{ fill: "var(--chart-muted)", fontSize: 12 }}
             domain={yDomain ?? ["dataMin - 1", "dataMax + 1"]}
+            allowDataOverflow={yDomain !== undefined}
             label={{ value: "Lap time (s)", angle: -90, position: "insideLeft", fill: "var(--chart-muted)" }}
           />
           <Tooltip content={<LapTooltipContent />} />

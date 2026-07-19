@@ -15,6 +15,13 @@ interface EntryLike {
   laps: { lapNo: number; lapTimeMs: number }[];
 }
 
+function quantile(sorted: number[], q: number): number {
+  const pos = (sorted.length - 1) * q;
+  const base = Math.floor(pos);
+  const rest = pos - base;
+  return sorted[base + 1] !== undefined ? sorted[base] + rest * (sorted[base + 1] - sorted[base]) : sorted[base];
+}
+
 export default function LapTimesChart({
   entries,
   selectedNames,
@@ -52,6 +59,26 @@ export default function LapTimesChart({
     chartData.push(row);
   }
 
+  // Robust Y-axis bounds: a full-range domain gets stretched by rare,
+  // extreme-outlier laps (endurance-race pit stops can be several times a
+  // normal lap), which flattens the visible pace gaps between racers.
+  // Tukey's fences zoom the view to where the real lap times live across
+  // the whole field; pit-stop-length laps still plot, just clipped above
+  // the visible range instead of dictating the whole scale.
+  const allLapTimesSec = withLaps.flatMap((e) => e.laps.map((l) => l.lapTimeMs / 1000));
+  let yDomain: [number, number] | undefined;
+  if (allLapTimesSec.length >= 4) {
+    const sorted = [...allLapTimesSec].sort((a, b) => a - b);
+    const q1 = quantile(sorted, 0.25);
+    const q3 = quantile(sorted, 0.75);
+    const iqr = q3 - q1;
+    const dataMin = sorted[0];
+    const dataMax = sorted[sorted.length - 1];
+    const lo = Math.max(q1 - 1.5 * iqr, dataMin);
+    const hi = Math.min(q3 + 1.5 * iqr, dataMax);
+    yDomain = [Math.max(0, lo - 1), hi + 1];
+  }
+
   return (
     <ResponsiveContainer width="100%" height={360}>
       <LineChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
@@ -65,7 +92,8 @@ export default function LapTimesChart({
         <YAxis
           stroke="var(--chart-muted)"
           tick={{ fill: "var(--chart-muted)", fontSize: 12 }}
-          domain={["dataMin - 1", "dataMax + 1"]}
+          domain={yDomain ?? ["dataMin - 1", "dataMax + 1"]}
+          allowDataOverflow={yDomain !== undefined}
           label={{ value: "Lap time (s)", angle: -90, position: "insideLeft", fill: "var(--chart-muted)" }}
         />
         <Tooltip
