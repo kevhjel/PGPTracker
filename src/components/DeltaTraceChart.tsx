@@ -20,10 +20,13 @@ interface ProjectedLap {
   projection?: { points: ProjectionPoint[] } | null;
 }
 
+// See convex/lib/trackProjection.ts's version of this function for why
+// out-of-range distances return undefined rather than a clamped value.
 function interpolateTimeAtDistance(points: ProjectionPoint[], distM: number): number | undefined {
   if (points.length === 0) return undefined;
-  if (distM <= points[0].distM) return points[0].t;
-  if (distM >= points[points.length - 1].distM) return points[points.length - 1].t;
+  if (distM < points[0].distM || distM > points[points.length - 1].distM) return undefined;
+  if (distM === points[0].distM) return points[0].t;
+  if (distM === points[points.length - 1].distM) return points[points.length - 1].t;
   for (let i = 0; i < points.length - 1; i++) {
     const a = points[i];
     const b = points[i + 1];
