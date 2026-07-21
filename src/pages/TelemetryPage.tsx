@@ -8,6 +8,9 @@ import { formatDate, formatLapTime } from "../lib/format";
 import GpxUploadControl from "../components/GpxUploadControl";
 import TrackBoundsUploadControl from "../components/TrackBoundsUploadControl";
 import TrackBoundsPreview from "../components/TrackBoundsPreview";
+import LapPlaybackView from "../components/LapPlaybackView";
+import DeltaTraceChart from "../components/DeltaTraceChart";
+import SectorTimeTable from "../components/SectorTimeTable";
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "Parsing…",
@@ -15,18 +18,29 @@ const STATUS_LABEL: Record<string, string> = {
   error: "Error",
 };
 
+type ComparisonTab = "playback" | "delta" | "sectors";
+
 export default function TelemetryPage() {
   const { secret } = useAdminSecret();
   const [selectedSessionId, setSelectedSessionId] = useState<Id<"gpsSessions"> | null>(null);
+  const [selectedLapIds, setSelectedLapIds] = useState<Set<Id<"gpsLaps">>>(new Set());
+  const [comparisonTab, setComparisonTab] = useState<ComparisonTab>("playback");
 
   const sessions = useQuery(api.gps.listSessions, secret ? { adminSecret: secret } : "skip");
   const trackBounds = useQuery(api.gps.getTrackBounds, secret ? { adminSecret: secret } : "skip");
+  const trackOrigin = useQuery(api.gps.getTrackOrigin, secret ? { adminSecret: secret } : "skip");
   const activeReference = useQuery(api.gps.getActiveTrackReference, secret ? { adminSecret: secret } : "skip");
   const laps = useQuery(
     api.gps.listLaps,
     secret && selectedSessionId ? { sessionId: selectedSessionId, adminSecret: secret } : "skip",
   );
+
   const buildTrackReferenceFromLap = useMutation(api.gps.buildTrackReferenceFromLap);
+  const deleteSession = useMutation(api.gps.deleteSession);
+  const deleteAllSessions = useMutation(api.gps.deleteAllSessions);
+  const deleteAllTrackBounds = useMutation(api.gps.deleteAllTrackBounds);
+  const deleteAllTrackReferences = useMutation(api.gps.deleteAllTrackReferences);
+
   const [referenceMessage, setReferenceMessage] = useState("");
   const [referenceBusyLapId, setReferenceBusyLapId] = useState<Id<"gpsLaps"> | null>(null);
 
@@ -48,6 +62,42 @@ export default function TelemetryPage() {
     }
   }
 
+  function toggleLapSelection(lapId: Id<"gpsLaps">) {
+    setSelectedLapIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(lapId)) next.delete(lapId);
+      else next.add(lapId);
+      return next;
+    });
+  }
+
+  async function handleDeleteSession(sessionId: Id<"gpsSessions">) {
+    if (!secret) return;
+    if (!confirm("Delete this uploaded session and all its laps? This can't be undone.")) return;
+    await deleteSession({ sessionId, adminSecret: secret });
+    if (selectedSessionId === sessionId) setSelectedSessionId(null);
+  }
+
+  async function handleDeleteAllSessions() {
+    if (!secret) return;
+    if (!confirm("Delete every uploaded session and lap? This can't be undone.")) return;
+    await deleteAllSessions({ adminSecret: secret });
+    setSelectedSessionId(null);
+    setSelectedLapIds(new Set());
+  }
+
+  async function handleClearBounds() {
+    if (!secret) return;
+    if (!confirm("Remove the track bounds shape?")) return;
+    await deleteAllTrackBounds({ adminSecret: secret });
+  }
+
+  async function handleClearReference() {
+    if (!secret) return;
+    if (!confirm("Remove the track reference? Every lap's sector times and delta data will be cleared until a new one is built.")) return;
+    await deleteAllTrackReferences({ adminSecret: secret });
+  }
+
   if (!secret) {
     return (
       <div className="space-y-2">
@@ -63,13 +113,23 @@ export default function TelemetryPage() {
     );
   }
 
+  const selectedLaps = (laps ?? []).filter((l) => selectedLapIds.has(l._id)).sort((a, b) => a.lapIndex - b.lapIndex);
+  const [baseLap, ...compareLaps] = selectedLaps;
+
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold">Telemetry</h1>
       <GpxUploadControl adminSecret={secret} />
 
       <div>
-        <h2 className="text-lg font-semibold mb-3">Track bounds</h2>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Track bounds</h2>
+          {trackBounds && (
+            <button onClick={handleClearBounds} className="text-xs text-red-600 hover:underline dark:text-red-400">
+              Clear bounds
+            </button>
+          )}
+        </div>
         <TrackBoundsUploadControl adminSecret={secret} />
         {(trackBounds || activeReference) && (
           <div className="mt-3">
@@ -84,7 +144,14 @@ export default function TelemetryPage() {
       </div>
 
       <div>
-        <h2 className="text-lg font-semibold mb-3">Track reference</h2>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Track reference</h2>
+          {activeReference && (
+            <button onClick={handleClearReference} className="text-xs text-red-600 hover:underline dark:text-red-400">
+              Clear reference
+            </button>
+          )}
+        </div>
         {referenceMessage && <p className="mb-3 text-sm text-neutral-500">{referenceMessage}</p>}
         {!activeReference && <p className="text-neutral-500">No track reference yet — pick a clean lap below.</p>}
         {activeReference && (
@@ -128,7 +195,14 @@ export default function TelemetryPage() {
       </div>
 
       <div>
-        <h2 className="text-lg font-semibold mb-3">Uploaded sessions</h2>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Uploaded sessions</h2>
+          {sessions !== undefined && sessions.length > 0 && (
+            <button onClick={handleDeleteAllSessions} className="text-xs text-red-600 hover:underline dark:text-red-400">
+              Delete all
+            </button>
+          )}
+        </div>
         {sessions === undefined && <p className="text-neutral-500">Loading…</p>}
         {sessions?.length === 0 && <p className="text-neutral-500">No GPX files uploaded yet.</p>}
         {sessions !== undefined && sessions.length > 0 && (
@@ -140,20 +214,24 @@ export default function TelemetryPage() {
                   <th className="px-3 py-2">Uploaded</th>
                   <th className="px-3 py-2">Status</th>
                   <th className="px-3 py-2">Laps</th>
+                  <th className="px-3 py-2"></th>
                 </tr>
               </thead>
               <tbody>
                 {sessions.map((s) => (
                   <tr
                     key={s._id}
-                    onClick={() => setSelectedSessionId(s._id)}
-                    className={`cursor-pointer border-t border-neutral-100 hover:bg-neutral-50 dark:border-neutral-800 dark:hover:bg-neutral-900 ${
+                    className={`border-t border-neutral-100 hover:bg-neutral-50 dark:border-neutral-800 dark:hover:bg-neutral-900 ${
                       selectedSessionId === s._id ? "bg-neutral-50 dark:bg-neutral-900" : ""
                     }`}
                   >
-                    <td className="px-3 py-2">{s.fileName}</td>
-                    <td className="px-3 py-2">{formatDate(s.uploadedAt)}</td>
-                    <td className="px-3 py-2">
+                    <td className="cursor-pointer px-3 py-2" onClick={() => setSelectedSessionId(s._id)}>
+                      {s.fileName}
+                    </td>
+                    <td className="cursor-pointer px-3 py-2" onClick={() => setSelectedSessionId(s._id)}>
+                      {formatDate(s.uploadedAt)}
+                    </td>
+                    <td className="cursor-pointer px-3 py-2" onClick={() => setSelectedSessionId(s._id)}>
                       <span
                         className={
                           s.status === "error"
@@ -169,7 +247,17 @@ export default function TelemetryPage() {
                         <span className="ml-2 text-xs text-neutral-500">{s.errorMessage}</span>
                       )}
                     </td>
-                    <td className="px-3 py-2 tabular-nums">{s.lapCount ?? "–"}</td>
+                    <td className="cursor-pointer px-3 py-2 tabular-nums" onClick={() => setSelectedSessionId(s._id)}>
+                      {s.lapCount ?? "–"}
+                    </td>
+                    <td className="px-3 py-2">
+                      <button
+                        onClick={() => handleDeleteSession(s._id)}
+                        className="text-xs text-red-600 hover:underline dark:text-red-400"
+                      >
+                        Delete
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -181,6 +269,7 @@ export default function TelemetryPage() {
       {selectedSessionId && (
         <div>
           <h2 className="text-lg font-semibold mb-3">Laps</h2>
+          <p className="mb-3 text-sm text-neutral-500">Select laps below to play them back or compare deltas/sectors.</p>
           {laps === undefined && <p className="text-neutral-500">Loading…</p>}
           {laps?.length === 0 && <p className="text-neutral-500">No laps in this session.</p>}
           {laps !== undefined && laps.length > 0 && (
@@ -188,6 +277,7 @@ export default function TelemetryPage() {
               <table className="w-full text-sm">
                 <thead className="bg-neutral-50 text-left text-neutral-500 dark:bg-neutral-900">
                   <tr>
+                    <th className="px-3 py-2"></th>
                     <th className="px-3 py-2">Lap</th>
                     <th className="px-3 py-2">Source</th>
                     <th className="px-3 py-2">Start</th>
@@ -200,6 +290,13 @@ export default function TelemetryPage() {
                 <tbody>
                   {laps.map((lap) => (
                     <tr key={lap._id} className="border-t border-neutral-100 dark:border-neutral-800">
+                      <td className="px-3 py-2">
+                        <input
+                          type="checkbox"
+                          checked={selectedLapIds.has(lap._id)}
+                          onChange={() => toggleLapSelection(lap._id)}
+                        />
+                      </td>
                       <td className="px-3 py-2 tabular-nums">{lap.lapIndex + 1}</td>
                       <td className="px-3 py-2">
                         {lap.source === "trkseg"
@@ -231,6 +328,66 @@ export default function TelemetryPage() {
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {selectedLaps.length > 0 && (
+        <div>
+          <div className="mb-3 flex flex-wrap gap-2">
+            {(["playback", "delta", "sectors"] as const).map((tab) => (
+              <button
+                key={tab}
+                onClick={() => setComparisonTab(tab)}
+                className={`rounded-md border px-3 py-1.5 text-sm ${
+                  comparisonTab === tab
+                    ? "border-transparent bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+                    : "border-neutral-300 dark:border-neutral-700"
+                }`}
+              >
+                {tab === "playback" ? "Playback" : tab === "delta" ? "Delta trace" : "Sectors"}
+              </button>
+            ))}
+          </div>
+
+          {comparisonTab === "playback" &&
+            (trackOrigin ? (
+              <LapPlaybackView
+                laps={selectedLaps}
+                originLat={trackOrigin.lat}
+                originLon={trackOrigin.lon}
+                outline={trackBounds?.outline ?? undefined}
+                innerEdge={trackBounds?.innerEdge ?? undefined}
+                outerEdge={trackBounds?.outerEdge ?? undefined}
+                referenceLine={activeReference?.polyline}
+              />
+            ) : (
+              <p className="text-sm text-neutral-500">Upload track bounds or build a track reference first.</p>
+            ))}
+
+          {comparisonTab === "delta" &&
+            (baseLap && compareLaps.length > 0 && activeReference ? (
+              <>
+                <p className="mb-3 text-sm text-neutral-500">
+                  Comparing against Lap {baseLap.lapIndex + 1} (positive = losing time, negative = gaining).
+                </p>
+                <DeltaTraceChart
+                  referenceDistances={activeReference.polyline.map((p) => p.distM)}
+                  baseLap={baseLap}
+                  compareLaps={compareLaps}
+                />
+              </>
+            ) : (
+              <p className="text-sm text-neutral-500">
+                Select at least two laps (with a track reference built) to see a delta trace.
+              </p>
+            ))}
+
+          {comparisonTab === "sectors" &&
+            (activeReference ? (
+              <SectorTimeTable sectorCount={activeReference.sectors.length} laps={selectedLaps} />
+            ) : (
+              <p className="text-sm text-neutral-500">Build a track reference first to see sector times.</p>
+            ))}
         </div>
       )}
     </div>

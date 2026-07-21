@@ -140,6 +140,93 @@ export const getLap = query({
   },
 });
 
+export const getLapsByIds = query({
+  args: { lapIds: v.array(v.id("gpsLaps")), adminSecret: v.string() },
+  handler: async (ctx, { lapIds, adminSecret }) => {
+    requireAdmin(adminSecret);
+    const laps = await Promise.all(lapIds.map((id) => ctx.db.get(id)));
+    return laps.filter((l): l is NonNullable<typeof l> => l !== null);
+  },
+});
+
+/** The shared coordinate origin (see getOrSetTrackOrigin), if either bounds or a reference has established one. */
+export const getTrackOrigin = query({
+  args: { adminSecret: v.string() },
+  handler: async (ctx, { adminSecret }) => {
+    requireAdmin(adminSecret);
+    const row = await ctx.db
+      .query("appSettings")
+      .withIndex("by_key", (q) => q.eq("key", TRACK_ORIGIN_KEY))
+      .unique();
+    return (row?.value as { lat: number; lon: number } | undefined) ?? null;
+  },
+});
+
+/** Deletes an uploaded session, its laps, and its stored file. */
+export const deleteSession = mutation({
+  args: { sessionId: v.id("gpsSessions"), adminSecret: v.string() },
+  handler: async (ctx, { sessionId, adminSecret }) => {
+    requireAdmin(adminSecret);
+    await deleteSessionCascade(ctx, sessionId);
+  },
+});
+
+/** Deletes every uploaded session, its laps, and its stored file - for clearing out test data in bulk. */
+export const deleteAllSessions = mutation({
+  args: { adminSecret: v.string() },
+  handler: async (ctx, { adminSecret }) => {
+    requireAdmin(adminSecret);
+    const sessions = await ctx.db.query("gpsSessions").collect();
+    for (const session of sessions) {
+      await deleteSessionCascade(ctx, session._id);
+    }
+  },
+});
+
+async function deleteSessionCascade(ctx: { db: any; storage: any }, sessionId: any) {
+  const session = await ctx.db.get(sessionId);
+  if (!session) return;
+  const laps = await ctx.db
+    .query("gpsLaps")
+    .withIndex("by_session", (q: any) => q.eq("sessionId", sessionId))
+    .collect();
+  for (const lap of laps) {
+    await ctx.db.delete(lap._id);
+  }
+  await ctx.storage.delete(session.storageId);
+  await ctx.db.delete(sessionId);
+}
+
+/** Deletes every uploaded track-bounds file (current and historical). */
+export const deleteAllTrackBounds = mutation({
+  args: { adminSecret: v.string() },
+  handler: async (ctx, { adminSecret }) => {
+    requireAdmin(adminSecret);
+    const rows = await ctx.db.query("trackBounds").collect();
+    for (const row of rows) {
+      await ctx.db.delete(row._id);
+    }
+  },
+});
+
+/** Deletes every built track reference (current and historical) and clears any lap projections that pointed at them. */
+export const deleteAllTrackReferences = mutation({
+  args: { adminSecret: v.string() },
+  handler: async (ctx, { adminSecret }) => {
+    requireAdmin(adminSecret);
+    const rows = await ctx.db.query("trackReference").collect();
+    for (const row of rows) {
+      await ctx.db.delete(row._id);
+    }
+    const laps = await ctx.db.query("gpsLaps").collect();
+    for (const lap of laps) {
+      if (lap.projection) {
+        await ctx.db.patch(lap._id, { projection: undefined });
+      }
+    }
+  },
+});
+
 /** Admin picks a clean uploaded lap to become the persistent track reference; reprojects every existing lap against it. */
 export const buildTrackReferenceFromLap = mutation({
   args: { lapId: v.id("gpsLaps"), adminSecret: v.string() },
