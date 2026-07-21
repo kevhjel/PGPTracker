@@ -104,6 +104,7 @@ export default function DriverAnalyticsPage() {
   const [removeOutliers, setRemoveOutliers] = useState(false);
   const [showMovingAvg, setShowMovingAvg] = useState(true);
   const [showTrendline, setShowTrendline] = useState(false);
+  const [viewMode, setViewMode] = useState<"laps" | "bestPerHeat">("laps");
 
   const chartData = useMemo(() => {
     if (!laps) return [];
@@ -120,7 +121,19 @@ export default function DriverAnalyticsPage() {
       filtered = filtered.filter((l) => l.lapTimeMs >= lo && l.lapTimeMs <= hi);
     }
 
-    const points = filtered.map((l, i) => ({
+    let baseItems: { heatNo: number; raceDateTime: number; lapTimeMs: number }[] = filtered;
+    if (viewMode === "bestPerHeat") {
+      const byHeat = new Map<number, { heatNo: number; raceDateTime: number; lapTimeMs: number }>();
+      for (const l of filtered) {
+        const existing = byHeat.get(l.heatNo);
+        if (!existing || l.lapTimeMs < existing.lapTimeMs) {
+          byHeat.set(l.heatNo, { heatNo: l.heatNo, raceDateTime: l.raceDateTime, lapTimeMs: l.lapTimeMs });
+        }
+      }
+      baseItems = [...byHeat.values()].sort((a, b) => a.raceDateTime - b.raceDateTime);
+    }
+
+    const points = baseItems.map((l, i) => ({
       x: i,
       lapTimeMs: l.lapTimeMs,
       lapTimeSec: l.lapTimeMs / 1000,
@@ -145,7 +158,7 @@ export default function DriverAnalyticsPage() {
     }
 
     return points;
-  }, [laps, hideOutlap, hideWet, removeOutliers, showMovingAvg, showTrendline]);
+  }, [laps, hideOutlap, hideWet, removeOutliers, showMovingAvg, showTrendline, viewMode]);
 
   // Robust Y-axis bounds: a full-range domain gets stretched by rare,
   // extreme-outlier laps (endurance-race pit stops can be several times a
@@ -177,6 +190,29 @@ export default function DriverAnalyticsPage() {
     <div className="space-y-6">
       <h1 className="text-2xl font-bold">{driver.displayName} — Analytics</h1>
 
+      <div className="flex flex-wrap gap-2 text-sm">
+        <button
+          onClick={() => setViewMode("laps")}
+          className={`rounded-md border px-3 py-1.5 ${
+            viewMode === "laps"
+              ? "border-transparent bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+              : "border-neutral-300 dark:border-neutral-700"
+          }`}
+        >
+          All laps
+        </button>
+        <button
+          onClick={() => setViewMode("bestPerHeat")}
+          className={`rounded-md border px-3 py-1.5 ${
+            viewMode === "bestPerHeat"
+              ? "border-transparent bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+              : "border-neutral-300 dark:border-neutral-700"
+          }`}
+        >
+          Best lap per heat
+        </button>
+      </div>
+
       <div className="flex flex-wrap gap-4 text-sm">
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={hideOutlap} onChange={(e) => setHideOutlap(e.target.checked)} />
@@ -207,7 +243,12 @@ export default function DriverAnalyticsPage() {
             dataKey="x"
             stroke="var(--chart-muted)"
             tick={{ fill: "var(--chart-muted)", fontSize: 12 }}
-            label={{ value: "Lap # (chronological)", position: "insideBottom", offset: -4, fill: "var(--chart-muted)" }}
+            label={{
+              value: viewMode === "bestPerHeat" ? "Heat # (chronological)" : "Lap # (chronological)",
+              position: "insideBottom",
+              offset: -4,
+              fill: "var(--chart-muted)",
+            }}
           />
           <YAxis
             stroke="var(--chart-muted)"
@@ -226,7 +267,11 @@ export default function DriverAnalyticsPage() {
       </ResponsiveContainer>
 
       <div>
-        <h2 className="text-lg font-semibold mb-3">Raw laps ({chartData.length} shown of {laps.length} total)</h2>
+        <h2 className="text-lg font-semibold mb-3">
+          {viewMode === "bestPerHeat"
+            ? `Best lap per heat (${chartData.length} heats shown)`
+            : `Raw laps (${chartData.length} shown of ${laps.length} total)`}
+        </h2>
         <div className="max-h-96 overflow-y-auto overflow-x-auto rounded-lg border border-neutral-200 dark:border-neutral-800">
           <table className="w-full text-sm">
             <thead className="bg-neutral-50 text-left text-neutral-500 dark:bg-neutral-900 sticky top-0">

@@ -22,6 +22,45 @@ export const getById = query({
   },
 });
 
+/** Top 4 opponents this driver has shared the most heats with, and the head-to-head record against each. Bounded by this driver's own heat count. */
+export const getRivals = query({
+  args: { driverId: v.id("drivers") },
+  handler: async (ctx, { driverId }) => {
+    const entries = await ctx.db
+      .query("heatEntries")
+      .withIndex("by_driver", (q) => q.eq("driverId", driverId))
+      .collect();
+
+    const tally: Record<string, { races: number; wins: number; losses: number }> = {};
+    for (const e of entries) {
+      const coEntrants = await ctx.db
+        .query("heatEntries")
+        .withIndex("by_heat", (q) => q.eq("heatId", e.heatId))
+        .collect();
+      for (const opp of coEntrants) {
+        if (!opp.driverId || opp.driverId === driverId) continue;
+        const key = opp.driverId;
+        const t = (tally[key] ??= { races: 0, wins: 0, losses: 0 });
+        t.races++;
+        if (e.position < opp.position) t.wins++;
+        else if (e.position > opp.position) t.losses++;
+      }
+    }
+
+    const top = Object.entries(tally)
+      .sort((a, b) => b[1].races - a[1].races)
+      .slice(0, 4);
+
+    const withDrivers = await Promise.all(
+      top.map(async ([oppId, stats]) => ({
+        driver: await ctx.db.get(oppId as Id<"drivers">),
+        ...stats,
+      })),
+    );
+    return withDrivers.filter((r) => r.driver !== null);
+  },
+});
+
 export const listWatched = query({
   args: {},
   handler: async (ctx) => {

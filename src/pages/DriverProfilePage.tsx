@@ -3,11 +3,13 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { formatDate, formatHeatCategory, formatLapTime } from "../lib/format";
+import VideoBadge from "../components/VideoBadge";
 
 export default function DriverProfilePage() {
   const { driverId } = useParams();
   const id = driverId as Id<"drivers">;
   const driver = useQuery(api.drivers.getById, { driverId: id });
+  const rivals = useQuery(api.drivers.getRivals, { driverId: id });
   const { results, status, loadMore } = usePaginatedQuery(
     api.heats.listEntriesByDriver,
     { driverId: id },
@@ -57,6 +59,31 @@ export default function DriverProfilePage() {
         </div>
       </div>
 
+      {rivals && rivals.length > 0 && (
+        <div>
+          <h2 className="text-lg font-semibold mb-3">Rivals</h2>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {rivals.map((rival) => (
+              <div
+                key={rival.driver!._id}
+                className="rounded-lg border border-neutral-200 p-4 dark:border-neutral-800"
+              >
+                <Link
+                  to={`/drivers/${rival.driver!._id}`}
+                  className="font-semibold text-blue-600 hover:underline dark:text-blue-400"
+                >
+                  {rival.driver!.displayName}
+                </Link>
+                <div className="text-sm text-neutral-500">{rival.races} races together</div>
+                <div className="text-sm tabular-nums">
+                  {rival.wins}W – {rival.losses}L
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div>
         <h2 className="text-lg font-semibold mb-3">Heat history</h2>
         <div className="overflow-x-auto rounded-lg border border-neutral-200 dark:border-neutral-800">
@@ -70,6 +97,7 @@ export default function DriverProfilePage() {
                 <th className="px-3 py-2">Kart</th>
                 <th className="px-3 py-2">Best Lap</th>
                 <th className="px-3 py-2">Laps</th>
+                <th className="px-3 py-2">Video</th>
               </tr>
             </thead>
             <tbody>
@@ -86,6 +114,7 @@ export default function DriverProfilePage() {
                   <td className="px-3 py-2 tabular-nums">{entry.kartNo ?? "–"}</td>
                   <td className="px-3 py-2 tabular-nums">{formatLapTime(entry.bestLapMs)}</td>
                   <td className="px-3 py-2 tabular-nums">{entry.numLaps}</td>
+                  <td className="px-3 py-2">{heat?.youtubeVideoId && <VideoBadge />}</td>
                 </tr>
               ))}
             </tbody>
