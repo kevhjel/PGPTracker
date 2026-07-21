@@ -110,6 +110,70 @@ export default defineSchema({
     lastCheckedAt: v.number(),
   }).index("by_heatNo", ["heatNo"]),
 
+  gpsSessions: defineTable({
+    storageId: v.id("_storage"),
+    fileName: v.string(),
+    uploadedAt: v.number(),
+    status: v.union(v.literal("pending"), v.literal("parsed"), v.literal("error")),
+    errorMessage: v.optional(v.string()),
+    lapCount: v.optional(v.number()),
+  }).index("by_status", ["status"]),
+
+  gpsLaps: defineTable({
+    sessionId: v.id("gpsSessions"),
+    lapIndex: v.number(),
+    source: v.union(v.literal("trkseg"), v.literal("reference_crossing")),
+    label: v.optional(v.string()),
+    startTime: v.number(),
+    endTime: v.number(),
+    durationMs: v.number(),
+    points: v.array(
+      v.object({ lat: v.number(), lon: v.number(), t: v.number(), ele: v.optional(v.number()) }),
+    ),
+    projection: v.optional(
+      v.object({
+        referenceId: v.id("trackReference"),
+        points: v.array(v.object({ distM: v.number(), t: v.number(), speedMps: v.optional(v.number()) })),
+        sectorTimes: v.array(v.number()),
+        lapTimeMsRefined: v.optional(v.number()),
+      }),
+    ),
+  }).index("by_session", ["sessionId"]),
+
+  trackReference: defineTable({
+    sourceLapId: v.id("gpsLaps"),
+    createdAt: v.number(),
+    isActive: v.boolean(),
+    originLat: v.number(),
+    originLon: v.number(),
+    totalDistanceM: v.number(),
+    polyline: v.array(
+      v.object({ distM: v.number(), lat: v.number(), lon: v.number(), x: v.number(), y: v.number() }),
+    ),
+    sectors: v.array(
+      v.object({
+        index: v.number(),
+        type: v.union(v.literal("corner"), v.literal("straight")),
+        startDistM: v.number(),
+        endDistM: v.number(),
+      }),
+    ),
+    buildParams: v.object({
+      resampleSpacingM: v.number(),
+      curvatureThresholdRadPerM: v.number(),
+      minSegmentLengthM: v.number(),
+    }),
+  }).index("by_active", ["isActive"]),
+
+  trackBounds: defineTable({
+    createdAt: v.number(),
+    isActive: v.boolean(),
+    sourceFormat: v.union(v.literal("geojson"), v.literal("gpx")),
+    outline: v.optional(v.array(v.object({ lat: v.number(), lon: v.number() }))),
+    innerEdge: v.optional(v.array(v.object({ lat: v.number(), lon: v.number() }))),
+    outerEdge: v.optional(v.array(v.object({ lat: v.number(), lon: v.number() }))),
+  }).index("by_active", ["isActive"]),
+
   appSettings: defineTable({
     key: v.string(),
     value: v.any(),
