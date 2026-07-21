@@ -49,7 +49,7 @@ export const getRivals = query({
 
     const top = Object.entries(tally)
       .sort((a, b) => b[1].races - a[1].races)
-      .slice(0, 4);
+      .slice(0, 8);
 
     const withDrivers = await Promise.all(
       top.map(async ([oppId, stats]) => ({
@@ -58,6 +58,35 @@ export const getRivals = query({
       })),
     );
     return withDrivers.filter((r) => r.driver !== null);
+  },
+});
+
+/** Head-to-head record between two specific drivers. Bounded by driverId's own heat count. */
+export const getHeadToHead = query({
+  args: { driverId: v.id("drivers"), opponentId: v.id("drivers") },
+  handler: async (ctx, { driverId, opponentId }) => {
+    if (driverId === opponentId) return { races: 0, wins: 0, losses: 0 };
+
+    const entries = await ctx.db
+      .query("heatEntries")
+      .withIndex("by_driver", (q) => q.eq("driverId", driverId))
+      .collect();
+
+    let races = 0;
+    let wins = 0;
+    let losses = 0;
+    for (const e of entries) {
+      const coEntrants = await ctx.db
+        .query("heatEntries")
+        .withIndex("by_heat", (q) => q.eq("heatId", e.heatId))
+        .collect();
+      const opp = coEntrants.find((c) => c.driverId === opponentId);
+      if (!opp) continue;
+      races++;
+      if (e.position < opp.position) wins++;
+      else if (e.position > opp.position) losses++;
+    }
+    return { races, wins, losses };
   },
 });
 
