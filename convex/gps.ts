@@ -2,9 +2,34 @@ import { v } from "convex/values";
 import { mutation, query, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { requireAdmin } from "./lib/adminAuth";
+import { boundingBoxCenter, projectToLocalMeters } from "./lib/geo";
+import { buildTrackReference } from "./lib/trackGeometry";
+import { projectLapOntoReference } from "./lib/trackProjection";
 
 // Personal GPS telemetry, not public race data - unlike the rest of this
 // app's queries, reads here require the admin secret too, not just writes.
+
+const TRACK_ORIGIN_KEY = "gpsTrackOrigin";
+
+/**
+ * Whichever of trackBounds or trackReference gets built first claims the
+ * shared coordinate origin (stored in appSettings, reusing its existing
+ * key/value pattern); the other aligns to it later instead of each picking
+ * its own origin independently, which would make them project into
+ * different local frames and never overlay correctly.
+ */
+async function getOrSetTrackOrigin(
+  ctx: { db: any },
+  fallback: { lat: number; lon: number },
+): Promise<{ lat: number; lon: number }> {
+  const row = await ctx.db
+    .query("appSettings")
+    .withIndex("by_key", (q: any) => q.eq("key", TRACK_ORIGIN_KEY))
+    .unique();
+  if (row) return row.value as { lat: number; lon: number };
+  await ctx.db.insert("appSettings", { key: TRACK_ORIGIN_KEY, value: fallback });
+  return fallback;
+}
 
 export const generateUploadUrl = mutation({
   args: { adminSecret: v.string() },
@@ -47,12 +72,38 @@ export const insertParsedLaps = internalMutation({
     ),
   },
   handler: async (ctx, { sessionId, laps }) => {
+    const activeRef = await ctx.db
+      .query("trackReference")
+      .withIndex("by_active", (q) => q.eq("isActive", true))
+      .unique();
+
     for (const lap of laps) {
-      await ctx.db.insert("gpsLaps", { sessionId, ...lap });
+      const projection = activeRef ? projectLap(lap.points, activeRef) : undefined;
+      await ctx.db.insert("gpsLaps", { sessionId, ...lap, projection });
     }
     await ctx.db.patch(sessionId, { status: "parsed", lapCount: laps.length });
   },
 });
+
+function projectLap(
+  points: { lat: number; lon: number; t: number }[],
+  reference: {
+    _id: any;
+    originLat: number;
+    originLon: number;
+    polyline: any;
+    sectors: any;
+    totalDistanceM: number;
+  },
+) {
+  const result = projectLapOntoReference(points, reference);
+  return {
+    referenceId: reference._id,
+    points: result.points,
+    sectorTimes: result.sectorTimes,
+    lapTimeMsRefined: result.lapTimeMsRefined,
+  };
+}
 
 export const markSessionError = internalMutation({
   args: { sessionId: v.id("gpsSessions"), errorMessage: v.string() },
@@ -86,5 +137,128 @@ export const getLap = query({
   handler: async (ctx, { lapId, adminSecret }) => {
     requireAdmin(adminSecret);
     return await ctx.db.get(lapId);
+  },
+});
+
+/** Admin picks a clean uploaded lap to become the persistent track reference; reprojects every existing lap against it. */
+export const buildTrackReferenceFromLap = mutation({
+  args: { lapId: v.id("gpsLaps"), adminSecret: v.string() },
+  handler: async (ctx, { lapId, adminSecret }) => {
+    requireAdmin(adminSecret);
+    const lap = await ctx.db.get(lapId);
+    if (!lap) throw new Error("Lap not found.");
+    if (lap.points.length < 10) {
+      throw new Error("This lap doesn't have enough points to build a reliable track reference.");
+    }
+
+    const origin = await getOrSetTrackOrigin(ctx, boundingBoxCenter(lap.points));
+    const built = buildTrackReference(lap.points, origin.lat, origin.lon);
+
+    const priorActive = await ctx.db
+      .query("trackReference")
+      .withIndex("by_active", (q) => q.eq("isActive", true))
+      .collect();
+    for (const row of priorActive) {
+      await ctx.db.patch(row._id, { isActive: false });
+    }
+
+    const referenceId = await ctx.db.insert("trackReference", {
+      sourceLapId: lapId,
+      createdAt: Date.now(),
+      isActive: true,
+      originLat: origin.lat,
+      originLon: origin.lon,
+      totalDistanceM: built.totalDistanceM,
+      polyline: built.polyline,
+      sectors: built.sectors,
+      buildParams: {
+        resampleSpacingM: 2,
+        curvatureThresholdRadPerM: 0.03,
+        minSegmentLengthM: 15,
+      },
+    });
+
+    const reference = {
+      _id: referenceId,
+      originLat: origin.lat,
+      originLon: origin.lon,
+      polyline: built.polyline,
+      sectors: built.sectors,
+      totalDistanceM: built.totalDistanceM,
+    };
+    const allLaps = await ctx.db.query("gpsLaps").collect();
+    for (const l of allLaps) {
+      await ctx.db.patch(l._id, { projection: projectLap(l.points, reference) });
+    }
+
+    return { referenceId, sectorCount: built.sectors.length, usedFallbackSectors: built.usedFallbackSectors };
+  },
+});
+
+/** The currently-active persistent track reference, if one has been built. */
+export const getActiveTrackReference = query({
+  args: { adminSecret: v.string() },
+  handler: async (ctx, { adminSecret }) => {
+    requireAdmin(adminSecret);
+    return await ctx.db
+      .query("trackReference")
+      .withIndex("by_active", (q) => q.eq("isActive", true))
+      .unique();
+  },
+});
+
+/** Called by the parseTrackBounds action once it has extracted lat/lon rings from the uploaded file. */
+export const insertTrackBounds = internalMutation({
+  args: {
+    sourceFormat: v.union(v.literal("geojson"), v.literal("gpx")),
+    outline: v.optional(v.array(v.object({ lat: v.number(), lon: v.number() }))),
+    innerEdge: v.optional(v.array(v.object({ lat: v.number(), lon: v.number() }))),
+    outerEdge: v.optional(v.array(v.object({ lat: v.number(), lon: v.number() }))),
+  },
+  handler: async (ctx, args) => {
+    const priorActive = await ctx.db
+      .query("trackBounds")
+      .withIndex("by_active", (q) => q.eq("isActive", true))
+      .collect();
+    for (const row of priorActive) {
+      await ctx.db.patch(row._id, { isActive: false });
+    }
+
+    await ctx.db.insert("trackBounds", { ...args, createdAt: Date.now(), isActive: true });
+
+    const originCandidate = args.outerEdge ?? args.outline ?? args.innerEdge ?? [];
+    if (originCandidate.length > 0) {
+      await getOrSetTrackOrigin(ctx, boundingBoxCenter(originCandidate));
+    }
+  },
+});
+
+/** Active track-bounds shape, projected into the shared local (x,y) frame ready to draw. */
+export const getTrackBounds = query({
+  args: { adminSecret: v.string() },
+  handler: async (ctx, { adminSecret }) => {
+    requireAdmin(adminSecret);
+    const bounds = await ctx.db
+      .query("trackBounds")
+      .withIndex("by_active", (q) => q.eq("isActive", true))
+      .unique();
+    if (!bounds) return null;
+
+    const originRow = await ctx.db
+      .query("appSettings")
+      .withIndex("by_key", (q) => q.eq("key", TRACK_ORIGIN_KEY))
+      .unique();
+    const origin =
+      (originRow?.value as { lat: number; lon: number } | undefined) ??
+      boundingBoxCenter(bounds.outerEdge ?? bounds.outline ?? bounds.innerEdge ?? []);
+
+    const project = (pts?: { lat: number; lon: number }[]) =>
+      pts?.map((p) => projectToLocalMeters(p.lat, p.lon, origin.lat, origin.lon));
+
+    return {
+      outline: project(bounds.outline),
+      innerEdge: project(bounds.innerEdge),
+      outerEdge: project(bounds.outerEdge),
+    };
   },
 });

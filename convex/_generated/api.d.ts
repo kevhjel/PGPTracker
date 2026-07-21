@@ -10,6 +10,7 @@
 
 import type * as actions_backfillDriver from "../actions/backfillDriver.js";
 import type * as actions_parseGpx from "../actions/parseGpx.js";
+import type * as actions_parseTrackBounds from "../actions/parseTrackBounds.js";
 import type * as actions_scrapeHeats from "../actions/scrapeHeats.js";
 import type * as appSettings from "../appSettings.js";
 import type * as crons from "../crons.js";
@@ -20,9 +21,12 @@ import type * as lib_adminAuth from "../lib/adminAuth.js";
 import type * as lib_clubspeedParser from "../lib/clubspeedParser.js";
 import type * as lib_constants from "../lib/constants.js";
 import type * as lib_geo from "../lib/geo.js";
+import type * as lib_geoJsonBounds from "../lib/geoJsonBounds.js";
 import type * as lib_gpxParse from "../lib/gpxParse.js";
 import type * as lib_heatType from "../lib/heatType.js";
 import type * as lib_lapSplit from "../lib/lapSplit.js";
+import type * as lib_trackGeometry from "../lib/trackGeometry.js";
+import type * as lib_trackProjection from "../lib/trackProjection.js";
 import type * as lib_trackSchedule from "../lib/trackSchedule.js";
 import type * as lib_wetDetection from "../lib/wetDetection.js";
 import type * as lib_youtube from "../lib/youtube.js";
@@ -37,6 +41,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   "actions/backfillDriver": typeof actions_backfillDriver;
   "actions/parseGpx": typeof actions_parseGpx;
+  "actions/parseTrackBounds": typeof actions_parseTrackBounds;
   "actions/scrapeHeats": typeof actions_scrapeHeats;
   appSettings: typeof appSettings;
   crons: typeof crons;
@@ -47,9 +52,12 @@ declare const fullApi: ApiFromModules<{
   "lib/clubspeedParser": typeof lib_clubspeedParser;
   "lib/constants": typeof lib_constants;
   "lib/geo": typeof lib_geo;
+  "lib/geoJsonBounds": typeof lib_geoJsonBounds;
   "lib/gpxParse": typeof lib_gpxParse;
   "lib/heatType": typeof lib_heatType;
   "lib/lapSplit": typeof lib_lapSplit;
+  "lib/trackGeometry": typeof lib_trackGeometry;
+  "lib/trackProjection": typeof lib_trackProjection;
   "lib/trackSchedule": typeof lib_trackSchedule;
   "lib/wetDetection": typeof lib_wetDetection;
   "lib/youtube": typeof lib_youtube;

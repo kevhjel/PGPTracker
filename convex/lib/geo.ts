@@ -15,7 +15,34 @@ export function projectToLocalMeters(
   };
 }
 
+export function unprojectFromLocalMeters(
+  x: number,
+  y: number,
+  originLat: number,
+  originLon: number,
+): { lat: number; lon: number } {
+  const metersPerDegLon = METERS_PER_DEG_LAT * Math.cos((originLat * Math.PI) / 180);
+  return {
+    lat: originLat + y / METERS_PER_DEG_LAT,
+    lon: originLon + x / metersPerDegLon,
+  };
+}
+
 export function distanceMeters(a: { lat: number; lon: number }, b: { lat: number; lon: number }): number {
   const p = projectToLocalMeters(a.lat, a.lon, b.lat, b.lon);
   return Math.hypot(p.x, p.y);
+}
+
+export function boundingBoxCenter(points: { lat: number; lon: number }[]): { lat: number; lon: number } {
+  let minLat = Infinity;
+  let maxLat = -Infinity;
+  let minLon = Infinity;
+  let maxLon = -Infinity;
+  for (const p of points) {
+    minLat = Math.min(minLat, p.lat);
+    maxLat = Math.max(maxLat, p.lat);
+    minLon = Math.min(minLon, p.lon);
+    maxLon = Math.max(maxLon, p.lon);
+  }
+  return { lat: (minLat + maxLat) / 2, lon: (minLon + maxLon) / 2 };
 }
