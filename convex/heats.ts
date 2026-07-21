@@ -799,22 +799,39 @@ export const clearWetnessOverride = mutation({
  * server-side (never trusts client-side validation) and replaces any
  * existing link. */
 export const setHeatVideo = mutation({
-  args: { heatId: v.id("heats"), url: v.string(), adminSecret: v.string() },
-  handler: async (ctx, { heatId, url, adminSecret }) => {
+  args: {
+    heatId: v.id("heats"),
+    url: v.string(),
+    slot: v.optional(v.union(v.literal(1), v.literal(2))),
+    adminSecret: v.string(),
+  },
+  handler: async (ctx, { heatId, url, slot, adminSecret }) => {
     requireAdmin(adminSecret);
     const videoId = parseYoutubeVideoId(url);
     if (!videoId) {
       throw new Error("Couldn't find a valid YouTube video ID in that URL.");
     }
-    await ctx.db.patch(heatId, { youtubeVideoId: videoId, youtubeAddedAt: Date.now() });
+    if (slot === 2) {
+      await ctx.db.patch(heatId, { youtubeVideoId2: videoId, youtubeAddedAt2: Date.now() });
+    } else {
+      await ctx.db.patch(heatId, { youtubeVideoId: videoId, youtubeAddedAt: Date.now() });
+    }
   },
 });
 
 /** Removes an admin-set YouTube link from a heat. */
 export const clearHeatVideo = mutation({
-  args: { heatId: v.id("heats"), adminSecret: v.string() },
-  handler: async (ctx, { heatId, adminSecret }) => {
+  args: {
+    heatId: v.id("heats"),
+    slot: v.optional(v.union(v.literal(1), v.literal(2))),
+    adminSecret: v.string(),
+  },
+  handler: async (ctx, { heatId, slot, adminSecret }) => {
     requireAdmin(adminSecret);
-    await ctx.db.patch(heatId, { youtubeVideoId: undefined, youtubeAddedAt: undefined });
+    if (slot === 2) {
+      await ctx.db.patch(heatId, { youtubeVideoId2: undefined, youtubeAddedAt2: undefined });
+    } else {
+      await ctx.db.patch(heatId, { youtubeVideoId: undefined, youtubeAddedAt: undefined });
+    }
   },
 });

@@ -92,7 +92,7 @@ export default function HeatBrowserPage() {
                   <span className="inline-flex items-center gap-2">
                     {formatHeatCategory(heat.heatCategory)}
                     {heat.isWet && <WetBadge ratio={heat.wetnessRatio} />}
-                    {heat.youtubeVideoId && <VideoBadge />}
+                    {(heat.youtubeVideoId || heat.youtubeVideoId2) && <VideoBadge />}
                   </span>
                 </td>
                 <td className="px-3 py-2">{formatDate(heat.raceDateTime)}</td>

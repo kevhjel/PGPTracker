@@ -51,6 +51,8 @@ export default defineSchema({
     wetClassifiedAt: v.optional(v.number()),
     youtubeVideoId: v.optional(v.string()),
     youtubeAddedAt: v.optional(v.number()),
+    youtubeVideoId2: v.optional(v.string()),
+    youtubeAddedAt2: v.optional(v.number()),
   })
     .index("by_heatNo", ["heatNo"])
     .index("by_status", ["status"])

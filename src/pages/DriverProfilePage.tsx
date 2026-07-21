@@ -199,7 +199,7 @@ export default function DriverProfilePage() {
                   <td className="px-3 py-2 tabular-nums">{entry.kartNo ?? "–"}</td>
                   <td className="px-3 py-2 tabular-nums">{formatLapTime(entry.bestLapMs)}</td>
                   <td className="px-3 py-2 tabular-nums">{entry.numLaps}</td>
-                  <td className="px-3 py-2">{heat?.youtubeVideoId && <VideoBadge />}</td>
+                  <td className="px-3 py-2">{heat && (heat.youtubeVideoId || heat.youtubeVideoId2) && <VideoBadge />}</td>
                 </tr>
               ))}
             </tbody>

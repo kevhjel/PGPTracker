@@ -21,8 +21,10 @@ export default function HeatDetailPage() {
   const [wetnessMessage, setWetnessMessage] = useState("");
   const setHeatVideo = useMutation(api.heats.setHeatVideo);
   const clearHeatVideo = useMutation(api.heats.clearHeatVideo);
-  const [videoUrlInput, setVideoUrlInput] = useState("");
-  const [videoMessage, setVideoMessage] = useState("");
+  const [videoUrlInput1, setVideoUrlInput1] = useState("");
+  const [videoMessage1, setVideoMessage1] = useState("");
+  const [videoUrlInput2, setVideoUrlInput2] = useState("");
+  const [videoMessage2, setVideoMessage2] = useState("");
 
   const driversWithLaps = useMemo(
     () => (data ? data.entries.filter((e) => e.laps.length > 0).map((e) => e.driverNameRaw) : []),
@@ -72,7 +74,7 @@ export default function HeatDetailPage() {
               {formatHeatCategory(heat.heatCategory)} · {heat.rawHeatType} · {formatDate(heat.raceDateTime)}
             </span>
             {heat.isWet && <WetBadge ratio={heat.wetnessRatio} />}
-            {heat.youtubeVideoId && <VideoBadge />}
+            {(heat.youtubeVideoId || heat.youtubeVideoId2) && <VideoBadge />}
           </p>
         </div>
         <div className="flex gap-2">
@@ -91,58 +93,122 @@ export default function HeatDetailPage() {
         </div>
       </div>
 
-      {heat.youtubeVideoId && (
-        <div className="aspect-video w-full max-w-3xl overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-800">
-          <iframe
-            src={`https://www.youtube-nocookie.com/embed/${heat.youtubeVideoId}`}
-            title={`Heat #${heat.heatNo} video`}
-            className="h-full w-full"
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-            allowFullScreen
-          />
+      {(heat.youtubeVideoId || heat.youtubeVideoId2) && (
+        <div
+          className={
+            heat.youtubeVideoId && heat.youtubeVideoId2
+              ? "grid max-w-5xl grid-cols-1 gap-4 sm:grid-cols-2"
+              : "grid max-w-3xl grid-cols-1 gap-4"
+          }
+        >
+          {heat.youtubeVideoId && (
+            <div className="aspect-video w-full overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-800">
+              <iframe
+                src={`https://www.youtube-nocookie.com/embed/${heat.youtubeVideoId}`}
+                title={`Heat #${heat.heatNo} video 1`}
+                className="h-full w-full"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allowFullScreen
+              />
+            </div>
+          )}
+          {heat.youtubeVideoId2 && (
+            <div className="aspect-video w-full overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-800">
+              <iframe
+                src={`https://www.youtube-nocookie.com/embed/${heat.youtubeVideoId2}`}
+                title={`Heat #${heat.heatNo} video 2`}
+                className="h-full w-full"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allowFullScreen
+              />
+            </div>
+          )}
         </div>
       )}
 
       {secret && (
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="text-neutral-500">Video:</span>
-          <input
-            type="text"
-            value={videoUrlInput}
-            onChange={(e) => setVideoUrlInput(e.target.value)}
-            placeholder="Paste YouTube URL…"
-            className="rounded-md border border-neutral-300 px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-900"
-          />
-          <button
-            onClick={async () => {
-              setVideoMessage("");
-              try {
-                await setHeatVideo({ heatId: heat._id, url: videoUrlInput, adminSecret: secret });
-                setVideoUrlInput("");
-              } catch (err) {
-                setVideoMessage(String(err));
-              }
-            }}
-            className="rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
-          >
-            {heat.youtubeVideoId ? "Replace" : "Save"}
-          </button>
-          {heat.youtubeVideoId && (
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-neutral-500">Video 1:</span>
+            <input
+              type="text"
+              value={videoUrlInput1}
+              onChange={(e) => setVideoUrlInput1(e.target.value)}
+              placeholder="Paste YouTube URL…"
+              className="rounded-md border border-neutral-300 px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-900"
+            />
             <button
               onClick={async () => {
-                setVideoMessage("");
+                setVideoMessage1("");
                 try {
-                  await clearHeatVideo({ heatId: heat._id, adminSecret: secret });
+                  await setHeatVideo({ heatId: heat._id, url: videoUrlInput1, slot: 1, adminSecret: secret });
+                  setVideoUrlInput1("");
                 } catch (err) {
-                  setVideoMessage(String(err));
+                  setVideoMessage1(String(err));
                 }
               }}
               className="rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
             >
-              Remove video
+              {heat.youtubeVideoId ? "Replace" : "Save"}
             </button>
-          )}
-          {videoMessage && <span className="text-red-600 dark:text-red-400">{videoMessage}</span>}
+            {heat.youtubeVideoId && (
+              <button
+                onClick={async () => {
+                  setVideoMessage1("");
+                  try {
+                    await clearHeatVideo({ heatId: heat._id, slot: 1, adminSecret: secret });
+                  } catch (err) {
+                    setVideoMessage1(String(err));
+                  }
+                }}
+                className="rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+              >
+                Remove
+              </button>
+            )}
+            {videoMessage1 && <span className="text-red-600 dark:text-red-400">{videoMessage1}</span>}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-neutral-500">Video 2:</span>
+            <input
+              type="text"
+              value={videoUrlInput2}
+              onChange={(e) => setVideoUrlInput2(e.target.value)}
+              placeholder="Paste YouTube URL…"
+              className="rounded-md border border-neutral-300 px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-900"
+            />
+            <button
+              onClick={async () => {
+                setVideoMessage2("");
+                try {
+                  await setHeatVideo({ heatId: heat._id, url: videoUrlInput2, slot: 2, adminSecret: secret });
+                  setVideoUrlInput2("");
+                } catch (err) {
+                  setVideoMessage2(String(err));
+                }
+              }}
+              className="rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+            >
+              {heat.youtubeVideoId2 ? "Replace" : "Save"}
+            </button>
+            {heat.youtubeVideoId2 && (
+              <button
+                onClick={async () => {
+                  setVideoMessage2("");
+                  try {
+                    await clearHeatVideo({ heatId: heat._id, slot: 2, adminSecret: secret });
+                  } catch (err) {
+                    setVideoMessage2(String(err));
+                  }
+                }}
+                className="rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+              >
+                Remove
+              </button>
+            )}
+            {videoMessage2 && <span className="text-red-600 dark:text-red-400">{videoMessage2}</span>}
+          </div>
         </div>
       )}
 
