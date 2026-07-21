@@ -3,15 +3,19 @@
 import { v } from "convex/values";
 import { internalAction } from "../_generated/server";
 import { internal } from "../_generated/api";
-import { parseGpx } from "../lib/gpxParse";
+import { parseGpx, type GpxPoint } from "../lib/gpxParse";
+import { splitLapsBySelfCrossing } from "../lib/lapSplit";
 
 const MIN_POINTS_PER_LAP = 5;
 
 /**
- * Splits on <trkseg> boundaries - watches typically emit one per manually-
- * lapped lap. A single trkseg spanning the whole file is stored as one lap;
- * splitting that case by track position instead (reference_crossing) needs
- * an already-built trackReference, so it isn't available until one exists.
+ * Prefers <trkseg> boundaries when the file actually has more than one -
+ * some exporters do emit one per manually-lapped lap. In practice most GPX
+ * exports (unlike TCX/FIT) don't preserve lap-button presses at all and
+ * hand back a single trkseg for the whole session, so that case falls back
+ * to self-crossing detection (see lapSplit.ts) - splitting by where the
+ * path returns near its own start point, which needs nothing but the lap's
+ * own recorded points, not a pre-built trackReference.
  */
 export const run = internalAction({
   args: { sessionId: v.id("gpsSessions"), storageId: v.id("_storage") },
@@ -24,12 +28,18 @@ export const run = internalAction({
       const text = await blob.text();
       const { segments } = parseGpx(text);
 
-      const laps = segments
-        .filter((points) => points.length >= MIN_POINTS_PER_LAP)
-        .map((points) => {
-          const sorted = [...points].sort((a, b) => a.t - b.t);
+      const rawGroups: { points: GpxPoint[]; source: "trkseg" | "self_crossing" }[] =
+        segments.length > 1
+          ? segments.map((points) => ({ points, source: "trkseg" as const }))
+          : splitLapsBySelfCrossing(segments[0]).map((points) => ({ points, source: "self_crossing" as const }));
+
+      const laps = rawGroups
+        .filter((g) => g.points.length >= MIN_POINTS_PER_LAP)
+        .map((g) => {
+          const sorted = [...g.points].sort((a, b) => a.t - b.t);
           return {
             points: sorted,
+            source: g.source,
             startTime: sorted[0].t,
             endTime: sorted[sorted.length - 1].t,
             durationMs: sorted[sorted.length - 1].t - sorted[0].t,
@@ -44,7 +54,7 @@ export const run = internalAction({
         sessionId,
         laps: laps.map((lap, i) => ({
           lapIndex: i,
-          source: "trkseg" as const,
+          source: lap.source,
           startTime: lap.startTime,
           endTime: lap.endTime,
           durationMs: lap.durationMs,

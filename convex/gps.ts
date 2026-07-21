@@ -36,7 +36,7 @@ export const insertParsedLaps = internalMutation({
     laps: v.array(
       v.object({
         lapIndex: v.number(),
-        source: v.union(v.literal("trkseg"), v.literal("reference_crossing")),
+        source: v.union(v.literal("trkseg"), v.literal("self_crossing"), v.literal("reference_crossing")),
         startTime: v.number(),
         endTime: v.number(),
         durationMs: v.number(),

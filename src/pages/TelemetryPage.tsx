@@ -115,7 +115,13 @@ export default function TelemetryPage() {
                   {laps.map((lap) => (
                     <tr key={lap._id} className="border-t border-neutral-100 dark:border-neutral-800">
                       <td className="px-3 py-2 tabular-nums">{lap.lapIndex + 1}</td>
-                      <td className="px-3 py-2">{lap.source === "trkseg" ? "Watch lap" : "Auto-detected"}</td>
+                      <td className="px-3 py-2">
+                        {lap.source === "trkseg"
+                          ? "Watch lap"
+                          : lap.source === "self_crossing"
+                            ? "Auto-detected"
+                            : "Reference-aligned"}
+                      </td>
                       <td className="px-3 py-2">{formatDate(lap.startTime)}</td>
                       <td className="px-3 py-2 tabular-nums">{formatLapTime(lap.durationMs)}</td>
                       <td className="px-3 py-2 tabular-nums">{lap.points.length}</td>

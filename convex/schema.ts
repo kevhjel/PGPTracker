@@ -122,7 +122,7 @@ export default defineSchema({
   gpsLaps: defineTable({
     sessionId: v.id("gpsSessions"),
     lapIndex: v.number(),
-    source: v.union(v.literal("trkseg"), v.literal("reference_crossing")),
+    source: v.union(v.literal("trkseg"), v.literal("self_crossing"), v.literal("reference_crossing")),
     label: v.optional(v.string()),
     startTime: v.number(),
     endTime: v.number(),
