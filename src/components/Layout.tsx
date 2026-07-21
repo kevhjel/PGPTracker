@@ -1,4 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
+import { useAdminSecret } from "../lib/adminSecret";
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   `px-3 py-2 rounded-md text-sm font-medium transition-colors ${
@@ -8,6 +9,8 @@ const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   }`;
 
 export default function Layout() {
+  const { secret } = useAdminSecret();
+
   return (
     <div className="min-h-screen bg-white text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
       <header className="border-b border-neutral-200 dark:border-neutral-800">
@@ -21,7 +24,7 @@ export default function Layout() {
             <NavLink to="/leaderboard" className={navLinkClass}>Leaderboard</NavLink>
             <NavLink to="/watchlist" className={navLinkClass}>Watchlist</NavLink>
             <NavLink to="/endurance" className={navLinkClass}>Endurance</NavLink>
-            <NavLink to="/telemetry" className={navLinkClass}>Telemetry</NavLink>
+            {secret && <NavLink to="/telemetry" className={navLinkClass}>Telemetry</NavLink>}
             <NavLink to="/admin/scrape-health" className={navLinkClass}>Admin</NavLink>
           </nav>
         </div>
