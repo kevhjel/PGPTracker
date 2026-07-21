@@ -11,6 +11,7 @@ import TrackBoundsPreview from "../components/TrackBoundsPreview";
 import LapPlaybackView from "../components/LapPlaybackView";
 import DeltaTraceChart from "../components/DeltaTraceChart";
 import SectorTimeTable from "../components/SectorTimeTable";
+import TrackShapeView from "../components/TrackShapeView";
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "Parsing…",
@@ -18,13 +19,14 @@ const STATUS_LABEL: Record<string, string> = {
   error: "Error",
 };
 
-type ComparisonTab = "playback" | "delta" | "sectors";
+type ComparisonTab = "playback" | "delta" | "sectors" | "map";
 
 export default function TelemetryPage() {
   const { secret } = useAdminSecret();
   const [selectedSessionId, setSelectedSessionId] = useState<Id<"gpsSessions"> | null>(null);
   const [selectedLapIds, setSelectedLapIds] = useState<Set<Id<"gpsLaps">>>(new Set());
   const [comparisonTab, setComparisonTab] = useState<ComparisonTab>("playback");
+  const [mapMode, setMapMode] = useState<"speed" | "delta">("speed");
 
   const sessions = useQuery(api.gps.listSessions, secret ? { adminSecret: secret } : "skip");
   const trackBounds = useQuery(api.gps.getTrackBounds, secret ? { adminSecret: secret } : "skip");
@@ -33,6 +35,15 @@ export default function TelemetryPage() {
   const laps = useQuery(
     api.gps.listLaps,
     secret && selectedSessionId ? { sessionId: selectedSessionId, adminSecret: secret } : "skip",
+  );
+  const selectedLapIdArray = Array.from(selectedLapIds);
+  // Selection persists across session switches, so the comparison views need
+  // every selected lap's full data, not just whichever session's table is
+  // currently open - listLaps alone would silently drop laps picked from a
+  // different session than the one on screen.
+  const selectedLapDocs = useQuery(
+    api.gps.getLapsByIds,
+    secret && selectedLapIdArray.length > 0 ? { lapIds: selectedLapIdArray, adminSecret: secret } : "skip",
   );
 
   const buildTrackReferenceFromLap = useMutation(api.gps.buildTrackReferenceFromLap);
@@ -113,7 +124,7 @@ export default function TelemetryPage() {
     );
   }
 
-  const selectedLaps = (laps ?? []).filter((l) => selectedLapIds.has(l._id)).sort((a, b) => a.lapIndex - b.lapIndex);
+  const selectedLaps = (selectedLapDocs ?? []).slice().sort((a, b) => a.lapIndex - b.lapIndex);
   const [baseLap, ...compareLaps] = selectedLaps;
 
   return (
@@ -334,7 +345,7 @@ export default function TelemetryPage() {
       {selectedLaps.length > 0 && (
         <div>
           <div className="mb-3 flex flex-wrap gap-2">
-            {(["playback", "delta", "sectors"] as const).map((tab) => (
+            {(["playback", "delta", "sectors", "map"] as const).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setComparisonTab(tab)}
@@ -344,7 +355,7 @@ export default function TelemetryPage() {
                     : "border-neutral-300 dark:border-neutral-700"
                 }`}
               >
-                {tab === "playback" ? "Playback" : tab === "delta" ? "Delta trace" : "Sectors"}
+                {tab === "playback" ? "Playback" : tab === "delta" ? "Delta trace" : tab === "sectors" ? "Sectors" : "Track map"}
               </button>
             ))}
           </div>
@@ -388,6 +399,40 @@ export default function TelemetryPage() {
             ) : (
               <p className="text-sm text-neutral-500">Build a track reference first to see sector times.</p>
             ))}
+
+          {comparisonTab === "map" && (
+            <>
+              <div className="mb-3 flex justify-center gap-2">
+                {(["speed", "delta"] as const).map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => setMapMode(m)}
+                    className={`rounded-md border px-3 py-1 text-xs ${
+                      mapMode === m
+                        ? "border-transparent bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+                        : "border-neutral-300 dark:border-neutral-700"
+                    }`}
+                  >
+                    {m === "speed" ? "Speed" : "Delta"}
+                  </button>
+                ))}
+              </div>
+              {activeReference ? (
+                <TrackShapeView
+                  outline={trackBounds?.outline ?? undefined}
+                  innerEdge={trackBounds?.innerEdge ?? undefined}
+                  outerEdge={trackBounds?.outerEdge ?? undefined}
+                  referencePolyline={activeReference.polyline}
+                  mode={mapMode}
+                  speedLap={baseLap}
+                  deltaBaseLap={baseLap}
+                  deltaCompareLap={compareLaps[0]}
+                />
+              ) : (
+                <p className="text-sm text-neutral-500">Build a track reference first.</p>
+              )}
+            </>
+          )}
         </div>
       )}
     </div>
