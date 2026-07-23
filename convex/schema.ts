@@ -197,6 +197,38 @@ export default defineSchema({
     computedAt: v.number(),
   }).index("by_category", ["heatCategory"]),
 
+  // All-time drivers-per-heat histogram data (arrive-and-drive only), bucketed
+  // by weekday x 15-minute time-of-day slot. Precomputed by a full nightly
+  // rebuild (convex/raceTimes.ts) rather than queried live, since a live scan
+  // of the whole heats table risks the same per-function read limit hit by
+  // the earlier driverRivalries incident.
+  raceTimeBuckets: defineTable({
+    weekday: v.number(), // 0=Sunday..6=Saturday, Pacific local (matches trackSchedule.ts)
+    slotStartMinute: v.number(), // minutes since Pacific midnight, floored to 15
+    heatCount: v.number(),
+    totalEntries: v.number(), // sum of heats.numEntries; avg = totalEntries / heatCount
+  }).index("by_weekday_slot", ["weekday", "slotStartMinute"]),
+
+  // Same shape as raceTimeBuckets, additionally split out per ISO week so the
+  // admin UI can filter the histogram to a single week instead of all-time.
+  raceTimeBucketsByWeek: defineTable({
+    isoYear: v.number(),
+    isoWeek: v.number(),
+    weekday: v.number(),
+    slotStartMinute: v.number(),
+    heatCount: v.number(),
+    totalEntries: v.number(),
+  }).index("by_week_weekday_slot", ["isoYear", "isoWeek", "weekday", "slotStartMinute"]),
+
+  // One row per ISO week that has any arrive-and-drive data, purely so the
+  // admin UI can populate a "filter by week" dropdown without scanning
+  // raceTimeBucketsByWeek.
+  raceTimeWeeks: defineTable({
+    isoYear: v.number(),
+    isoWeek: v.number(),
+    weekStartMs: v.number(), // Monday of this ISO week, date-only (label/sort use only)
+  }).index("by_year_week", ["isoYear", "isoWeek"]),
+
   appStats: defineTable({
     totalHeatsScraped: v.number(),
     totalDrivers: v.number(),

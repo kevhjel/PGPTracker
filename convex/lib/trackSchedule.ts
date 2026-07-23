@@ -50,11 +50,12 @@ export function isRecurringHolidayClosure(year: number, month: number, day: numb
   return false;
 }
 
-interface PacificParts {
+export interface PacificParts {
   year: number;
   month: number; // 1-12
   day: number;
   hour: number;
+  minute: number;
   weekday: number; // 0=Sunday..6=Saturday
 }
 
@@ -63,7 +64,7 @@ interface PacificParts {
 // date - the same tiny DST-boundary-day imprecision `clubspeedParser.ts`'s
 // existing `correctTrackLocalTimestamp` already accepts, immaterial here
 // since this only drives a scheduling heuristic, not stored data.
-function pacificPartsForUtc(utcMs: number): PacificParts {
+export function pacificPartsForUtc(utcMs: number): PacificParts {
   const d = new Date(utcMs);
   const offsetMin = pacificOffsetMinutes(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate());
   const local = new Date(utcMs + offsetMin * 60_000);
@@ -72,6 +73,7 @@ function pacificPartsForUtc(utcMs: number): PacificParts {
     month: local.getUTCMonth() + 1,
     day: local.getUTCDate(),
     hour: local.getUTCHours(),
+    minute: local.getUTCMinutes(),
     weekday: local.getUTCDay(),
   };
 }

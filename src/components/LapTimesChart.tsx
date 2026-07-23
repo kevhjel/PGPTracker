@@ -9,7 +9,7 @@ import {
   YAxis,
 } from "recharts";
 import { seriesColor } from "../lib/chartColors";
-import { MIN_VALID_LAP_MS } from "../../convex/lib/constants";
+import { MAX_VALID_LAP_MS, MIN_VALID_LAP_MS } from "../../convex/lib/constants";
 
 interface EntryLike {
   driverNameRaw: string;
@@ -49,15 +49,19 @@ export default function LapTimesChart({
   // Skip the out lap (lap 1) - it's run well below race pace, which
   // compresses the rest of the laps at the bottom of the chart and makes
   // individual lap times hard to read. Also drop ClubSpeed timing-glitch
-  // laps below MIN_VALID_LAP_MS (physically impossible on this track,
-  // occasionally recorded as ~0s) - same floor already used server-side
-  // for leaderboards/wetness classification. Unlike the endurance-only
-  // pit-lap exclusion below, this applies to every category: a glitch lap
-  // draws the same jarring vertical spike regardless of race type, and
-  // sub-MIN_VALID_LAP_MS is never a real lap to begin with.
+  // laps outside [MIN_VALID_LAP_MS, MAX_VALID_LAP_MS] (physically impossible
+  // on this track, occasionally recorded as ~0s or a stuck-beacon multi-
+  // minute value) - same bounds already used server-side for leaderboards/
+  // wetness classification. Unlike the endurance-only pit-lap exclusion
+  // below, this applies to every category: a glitch lap draws the same
+  // jarring vertical spike regardless of race type, and is never a real lap
+  // to begin with.
   const baseEntries = entries
     .filter((e) => !selectedNames || selectedNames.has(e.driverNameRaw))
-    .map((e) => ({ ...e, laps: e.laps.filter((l) => l.lapNo > 1 && l.lapTimeMs >= MIN_VALID_LAP_MS) }))
+    .map((e) => ({
+      ...e,
+      laps: e.laps.filter((l) => l.lapNo > 1 && l.lapTimeMs >= MIN_VALID_LAP_MS && l.lapTimeMs <= MAX_VALID_LAP_MS),
+    }))
     .filter((e) => e.laps.length > 0);
   if (baseEntries.length === 0) {
     return (

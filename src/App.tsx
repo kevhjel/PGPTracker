@@ -11,6 +11,7 @@ import DriverAnalyticsPage from './pages/DriverAnalyticsPage'
 import WatchlistPage from './pages/WatchlistPage'
 import EndurancePage from './pages/EndurancePage'
 import TelemetryPage from './pages/TelemetryPage'
+import RaceTimesPage from './pages/RaceTimesPage'
 import AdminScrapeHealthPage from './pages/admin/AdminScrapeHealthPage'
 import AdminDriversPage from './pages/admin/AdminDriversPage'
 import NotFoundPage from './pages/NotFoundPage'
@@ -29,6 +30,7 @@ function App() {
         <Route path="/watchlist" element={<WatchlistPage />} />
         <Route path="/endurance" element={<EndurancePage />} />
         <Route path="/telemetry" element={<TelemetryPage />} />
+        <Route path="/race-times" element={<RaceTimesPage />} />
         <Route path="/admin" element={<AdminLayout />}>
           <Route index element={<Navigate to="scrape-health" replace />} />
           <Route path="scrape-health" element={<AdminScrapeHealthPage />} />

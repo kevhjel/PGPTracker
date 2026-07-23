@@ -25,6 +25,7 @@ export default function Layout() {
             <NavLink to="/watchlist" className={navLinkClass}>Watchlist</NavLink>
             <NavLink to="/endurance" className={navLinkClass}>Endurance</NavLink>
             {secret && <NavLink to="/telemetry" className={navLinkClass}>Telemetry</NavLink>}
+            {secret && <NavLink to="/race-times" className={navLinkClass}>Race Times</NavLink>}
             <NavLink to="/admin/scrape-health" className={navLinkClass}>Admin</NavLink>
           </nav>
         </div>

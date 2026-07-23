@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "convex/react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import {
   CartesianGrid,
   ComposedChart,
@@ -13,6 +13,7 @@ import {
 } from "recharts";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { MAX_VALID_LAP_MS, MIN_VALID_LAP_MS } from "../../convex/lib/constants";
 import { formatDate, formatLapTime } from "../lib/format";
 
 const MOVING_AVG_WINDOW = 15;
@@ -108,7 +109,13 @@ export default function DriverAnalyticsPage() {
 
   const chartData = useMemo(() => {
     if (!laps) return [];
-    let filtered = hideOutlap ? laps.filter((l) => l.lapNo !== 1) : laps;
+    // Scraper glitches occasionally record an implausibly fast or slow
+    // "lap" - screen those out unconditionally before anything else, since
+    // they're corrupt data rather than legitimate (if unusual) race laps.
+    // This is distinct from the opt-in "Remove outliers" filter below, which
+    // trims genuine-but-extreme laps (e.g. a real caution/spin).
+    let filtered = laps.filter((l) => l.lapTimeMs >= MIN_VALID_LAP_MS && l.lapTimeMs <= MAX_VALID_LAP_MS);
+    if (hideOutlap) filtered = filtered.filter((l) => l.lapNo !== 1);
     if (hideWet) filtered = filtered.filter((l) => !l.isWet);
 
     if (removeOutliers && filtered.length > 4) {
@@ -160,16 +167,15 @@ export default function DriverAnalyticsPage() {
     return points;
   }, [laps, hideOutlap, hideWet, removeOutliers, showMovingAvg, showTrendline, viewMode]);
 
-  // Robust Y-axis bounds: a full-range domain gets stretched by rare,
-  // extreme-outlier laps (endurance-race pit stops can be several times a
-  // normal lap), which flattens the visible variation in genuine racing
-  // pace. Tukey's fences (same IQR technique as the "Remove outliers"
-  // filter above, but applied to the axis scale rather than the dataset)
-  // zoom the view to where the real lap times live; pit-stop-length laps
-  // still plot, just clipped above the visible range instead of dictating
-  // the whole scale.
+  // Robust Y-axis bounds: only clip the view with Tukey's fences when the
+  // user has opted into outlier removal. Clipping the axis independently of
+  // what's actually in chartData would hide extreme (but still-plotted)
+  // points off-screen while leaving them in the moving-average calculation,
+  // making the average line appear to spike above the visible data - so the
+  // two must stay in lockstep. When outliers haven't been removed from the
+  // data, the axis shows the true full range instead.
   const yDomain = useMemo<[number, number] | undefined>(() => {
-    if (chartData.length < 4) return undefined;
+    if (!removeOutliers || chartData.length < 4) return undefined;
     const sorted = chartData.map((p) => p.lapTimeSec).sort((a, b) => a - b);
     const q1 = quantile(sorted, 0.25);
     const q3 = quantile(sorted, 0.75);
@@ -179,7 +185,7 @@ export default function DriverAnalyticsPage() {
     const lo = Math.max(q1 - 1.5 * iqr, dataMin);
     const hi = Math.min(q3 + 1.5 * iqr, dataMax);
     return [Math.max(0, lo - 1), hi + 1];
-  }, [chartData]);
+  }, [chartData, removeOutliers]);
 
   const recentFirstLaps = useMemo(() => (laps ? [...laps].reverse() : []), [laps]);
 
@@ -276,6 +282,7 @@ export default function DriverAnalyticsPage() {
           <table className="w-full text-sm">
             <thead className="bg-neutral-50 text-left text-neutral-500 dark:bg-neutral-900 sticky top-0">
               <tr>
+                <th className="px-3 py-2">Lap</th>
                 <th className="px-3 py-2">Heat</th>
                 <th className="px-3 py-2">Date</th>
                 <th className="px-3 py-2">Lap time</th>
@@ -284,8 +291,11 @@ export default function DriverAnalyticsPage() {
             <tbody>
               {recentFirstLaps.map((l, i) => (
                 <tr key={i} className="border-t border-neutral-100 dark:border-neutral-800">
+                  <td className="px-3 py-2 tabular-nums">{l.lapNo}</td>
                   <td className="px-3 py-2">
-                    #{l.heatNo}
+                    <Link to={`/heats/${l.heatNo}`} className="text-blue-600 hover:underline dark:text-blue-400">
+                      #{l.heatNo}
+                    </Link>
                     {l.isWet && (
                       <span className="ml-2 text-xs" style={{ color: "var(--series-1)" }} title="Wet race">
                         (wet)

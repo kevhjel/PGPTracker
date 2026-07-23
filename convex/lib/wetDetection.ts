@@ -1,6 +1,9 @@
 export const MIN_ENTRIES_FOR_CLASSIFICATION = 3;
 export const WET_RATIO_THRESHOLD = 1.3;
 export const BASELINE_SAMPLE_SIZE = 150;
+// A lap this fast can't happen on a wet track, regardless of what the
+// ratio-vs-baseline math says - treat it as decisive dry evidence.
+export const DRY_OVERRIDE_LAP_MS = 86_000;
 
 export function median(values: number[]): number | undefined {
   if (values.length === 0) return undefined;
@@ -37,11 +40,12 @@ export function classifyWetness(
   const validAvg = avgLapsMs.filter((v) => v >= minValidLapMs);
   const bestLapRatio = median(validBest)! / baselineFastLapMs;
   const avgLapRatio = validAvg.length > 0 ? median(validAvg)! / baselineFastAvgLapMs : bestLapRatio;
+  const hasDecisiveDryLap = bestLapsMs.some((v) => v <= DRY_OVERRIDE_LAP_MS);
 
   return {
     bestLapRatio,
     avgLapRatio,
-    isWet: bestLapRatio >= WET_RATIO_THRESHOLD && avgLapRatio >= WET_RATIO_THRESHOLD,
+    isWet: !hasDecisiveDryLap && bestLapRatio >= WET_RATIO_THRESHOLD && avgLapRatio >= WET_RATIO_THRESHOLD,
     sampleSize: validBest.length,
   };
 }

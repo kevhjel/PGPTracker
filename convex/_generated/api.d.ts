@@ -24,12 +24,15 @@ import type * as lib_geo from "../lib/geo.js";
 import type * as lib_geoJsonBounds from "../lib/geoJsonBounds.js";
 import type * as lib_gpxParse from "../lib/gpxParse.js";
 import type * as lib_heatType from "../lib/heatType.js";
+import type * as lib_isoWeek from "../lib/isoWeek.js";
 import type * as lib_lapSplit from "../lib/lapSplit.js";
+import type * as lib_rivalries from "../lib/rivalries.js";
 import type * as lib_trackGeometry from "../lib/trackGeometry.js";
 import type * as lib_trackProjection from "../lib/trackProjection.js";
 import type * as lib_trackSchedule from "../lib/trackSchedule.js";
 import type * as lib_wetDetection from "../lib/wetDetection.js";
 import type * as lib_youtube from "../lib/youtube.js";
+import type * as raceTimes from "../raceTimes.js";
 import type * as wetDetection from "../wetDetection.js";
 
 import type {
@@ -55,12 +58,15 @@ declare const fullApi: ApiFromModules<{
   "lib/geoJsonBounds": typeof lib_geoJsonBounds;
   "lib/gpxParse": typeof lib_gpxParse;
   "lib/heatType": typeof lib_heatType;
+  "lib/isoWeek": typeof lib_isoWeek;
   "lib/lapSplit": typeof lib_lapSplit;
+  "lib/rivalries": typeof lib_rivalries;
   "lib/trackGeometry": typeof lib_trackGeometry;
   "lib/trackProjection": typeof lib_trackProjection;
   "lib/trackSchedule": typeof lib_trackSchedule;
   "lib/wetDetection": typeof lib_wetDetection;
   "lib/youtube": typeof lib_youtube;
+  raceTimes: typeof raceTimes;
   wetDetection: typeof wetDetection;
 }>;
 

@@ -25,5 +25,11 @@ crons.interval(
   internal.wetDetection.recomputeCategoryBaselines,
   {},
 );
+crons.interval(
+  "recompute race-time buckets",
+  { hours: 24 },
+  internal.raceTimes.recomputeRaceTimeBuckets,
+  {},
+);
 
 export default crons;
