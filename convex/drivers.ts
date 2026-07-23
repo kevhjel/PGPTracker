@@ -4,6 +4,7 @@ import { query, mutation, internalMutation, internalQuery } from "./_generated/s
 import type { Id, Doc } from "./_generated/dataModel";
 import { requireAdmin } from "./lib/adminAuth";
 import { MIN_VALID_LAP_MS } from "./lib/constants";
+import { updateRivalriesForHeat, mergeRivalries } from "./lib/rivalries";
 
 export const getByCustId = internalQuery({
   args: { custId: v.string() },
@@ -22,71 +23,42 @@ export const getById = query({
   },
 });
 
-/** Top 4 opponents this driver has shared the most heats with, and the head-to-head record against each. Bounded by this driver's own heat count. */
+/** Top 8 opponents this driver has shared the most heats with, and the head-to-head record against each. Reads from the driverRivalries cache, kept up to date incrementally at heat-ingestion time (see updateRivalriesForHeat) - a single bounded indexed query regardless of the driver's total heat count. */
 export const getRivals = query({
   args: { driverId: v.id("drivers") },
   handler: async (ctx, { driverId }) => {
-    const entries = await ctx.db
-      .query("heatEntries")
-      .withIndex("by_driver", (q) => q.eq("driverId", driverId))
-      .collect();
-
-    const tally: Record<string, { races: number; wins: number; losses: number }> = {};
-    for (const e of entries) {
-      const coEntrants = await ctx.db
-        .query("heatEntries")
-        .withIndex("by_heat", (q) => q.eq("heatId", e.heatId))
-        .collect();
-      for (const opp of coEntrants) {
-        if (!opp.driverId || opp.driverId === driverId) continue;
-        const key = opp.driverId;
-        const t = (tally[key] ??= { races: 0, wins: 0, losses: 0 });
-        t.races++;
-        if (e.position < opp.position) t.wins++;
-        else if (e.position > opp.position) t.losses++;
-      }
-    }
-
-    const top = Object.entries(tally)
-      .sort((a, b) => b[1].races - a[1].races)
-      .slice(0, 8);
+    const top = await ctx.db
+      .query("driverRivalries")
+      .withIndex("by_driver_races", (q) => q.eq("driverId", driverId))
+      .order("desc")
+      .take(8);
 
     const withDrivers = await Promise.all(
-      top.map(async ([oppId, stats]) => ({
-        driver: await ctx.db.get(oppId as Id<"drivers">),
-        ...stats,
+      top.map(async (r) => ({
+        driver: await ctx.db.get(r.opponentId),
+        races: r.races,
+        wins: r.wins,
+        losses: r.losses,
       })),
     );
     return withDrivers.filter((r) => r.driver !== null);
   },
 });
 
-/** Head-to-head record between two specific drivers. Bounded by driverId's own heat count. */
+/** Head-to-head record between two specific drivers. Single indexed lookup against the driverRivalries cache. */
 export const getHeadToHead = query({
   args: { driverId: v.id("drivers"), opponentId: v.id("drivers") },
   handler: async (ctx, { driverId, opponentId }) => {
     if (driverId === opponentId) return { races: 0, wins: 0, losses: 0 };
 
-    const entries = await ctx.db
-      .query("heatEntries")
-      .withIndex("by_driver", (q) => q.eq("driverId", driverId))
-      .collect();
+    const rivalry = await ctx.db
+      .query("driverRivalries")
+      .withIndex("by_driver_opponent", (q) => q.eq("driverId", driverId).eq("opponentId", opponentId))
+      .unique();
 
-    let races = 0;
-    let wins = 0;
-    let losses = 0;
-    for (const e of entries) {
-      const coEntrants = await ctx.db
-        .query("heatEntries")
-        .withIndex("by_heat", (q) => q.eq("heatId", e.heatId))
-        .collect();
-      const opp = coEntrants.find((c) => c.driverId === opponentId);
-      if (!opp) continue;
-      races++;
-      if (e.position < opp.position) wins++;
-      else if (e.position > opp.position) losses++;
-    }
-    return { races, wins, losses };
+    return rivalry
+      ? { races: rivalry.races, wins: rivalry.wins, losses: rivalry.losses }
+      : { races: 0, wins: 0, losses: 0 };
   },
 });
 
@@ -297,6 +269,7 @@ export const mergeDrivers = mutation({
     });
 
     await recomputeDriverAggregates(ctx, targetDriverId);
+    await mergeRivalries(ctx, sourceDriverId, targetDriverId);
 
     await ctx.db.patch(sourceDriverId, { mergedIntoDriverId: targetDriverId });
 
@@ -340,6 +313,43 @@ export const backfillWinsPodiumsBatch = internalMutation({
     }
     if (result.isDone) {
       await ctx.db.insert("appSettings", { key: WINS_PODIUMS_MIGRATION_DONE_KEY, value: Date.now() });
+    }
+    return { isDone: result.isDone, continueCursor: result.continueCursor, processedCount: result.page.length };
+  },
+});
+
+const RIVALRIES_MIGRATION_DONE_KEY = "driverRivalriesMigrationDone";
+
+/** One-time backfill of driverRivalries from existing heats, paginated across
+ * the whole heats table so each call stays bounded regardless of how much
+ * history exists. Call repeatedly passing back the previous continueCursor
+ * until isDone; locks itself out via appSettings afterward so a stray
+ * re-run is a no-op rather than double-counting. */
+export const backfillDriverRivalriesBatch = internalMutation({
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, { paginationOpts }) => {
+    const alreadyDone = await ctx.db
+      .query("appSettings")
+      .withIndex("by_key", (q) => q.eq("key", RIVALRIES_MIGRATION_DONE_KEY))
+      .unique();
+    if (alreadyDone) {
+      return { isDone: true, continueCursor: "", processedCount: 0, skipped: "already run" };
+    }
+
+    const result = await ctx.db.query("heats").paginate(paginationOpts);
+    for (const heat of result.page) {
+      const entries = await ctx.db
+        .query("heatEntries")
+        .withIndex("by_heat", (q) => q.eq("heatId", heat._id))
+        .collect();
+      await updateRivalriesForHeat(
+        ctx,
+        [],
+        entries.map((e) => ({ driverId: e.driverId, position: e.position })),
+      );
+    }
+    if (result.isDone) {
+      await ctx.db.insert("appSettings", { key: RIVALRIES_MIGRATION_DONE_KEY, value: Date.now() });
     }
     return { isDone: result.isDone, continueCursor: result.continueCursor, processedCount: result.page.length };
   },

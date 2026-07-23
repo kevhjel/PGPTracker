@@ -88,6 +88,16 @@ export default defineSchema({
     .index("by_category_bestLap", ["heatCategory", "bestLapMs"])
     .index("by_bestLap", ["bestLapMs"]),
 
+  driverRivalries: defineTable({
+    driverId: v.id("drivers"),
+    opponentId: v.id("drivers"),
+    races: v.number(),
+    wins: v.number(),
+    losses: v.number(),
+  })
+    .index("by_driver_opponent", ["driverId", "opponentId"])
+    .index("by_driver_races", ["driverId", "races"]),
+
   driverMerges: defineTable({
     sourceDriverId: v.id("drivers"),
     targetDriverId: v.id("drivers"),

@@ -9,6 +9,7 @@ import { MIN_VALID_LAP_MS } from "./lib/constants";
 import { classifyWetness, MIN_ENTRIES_FOR_CLASSIFICATION } from "./lib/wetDetection";
 import { requireAdmin } from "./lib/adminAuth";
 import { parseYoutubeVideoId } from "./lib/youtube";
+import { updateRivalriesForHeat } from "./lib/rivalries";
 
 const heatCategoryValidator = v.union(
   v.literal("arrive_and_drive"),
@@ -392,6 +393,7 @@ export const upsertHeat = internalMutation({
 
     let newDriverCount = 0;
     let newLapsSum = 0;
+    const newEntries: { driverId: Id<"drivers"> | undefined; position: number }[] = [];
     for (const entry of args.entries) {
       let driverId: Id<"drivers"> | undefined;
       if (entry.custId) {
@@ -427,6 +429,7 @@ export const upsertHeat = internalMutation({
       }
 
       newLapsSum += entry.numLaps;
+      newEntries.push({ driverId, position: entry.position });
       await ctx.db.insert("heatEntries", {
         heatId,
         heatNo: args.heatNo,
@@ -448,6 +451,8 @@ export const upsertHeat = internalMutation({
     for (const driverId of touchedDriverIds) {
       await recomputeDriverAggregates(ctx, driverId);
     }
+
+    await updateRivalriesForHeat(ctx, oldEntries, newEntries);
 
     const oldLapsSum = oldEntries.reduce((sum, e) => sum + e.numLaps, 0);
     const lapsDelta = newLapsSum - oldLapsSum;
