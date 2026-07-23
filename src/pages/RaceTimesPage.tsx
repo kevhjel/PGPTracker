@@ -124,7 +124,7 @@ export default function RaceTimesPage() {
         <label htmlFor="race-times-week">Week:</label>
         <select
           id="race-times-week"
-          className="rounded-md border border-neutral-300 bg-transparent px-2 py-1 dark:border-neutral-700"
+          className="rounded-md border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900"
           value={selectedWeek ? `${selectedWeek.isoYear}-${selectedWeek.isoWeek}` : "all"}
           onChange={(e) => {
             if (e.target.value === "all") {

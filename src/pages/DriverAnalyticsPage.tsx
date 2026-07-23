@@ -187,7 +187,14 @@ export default function DriverAnalyticsPage() {
     return [Math.max(0, lo - 1), hi + 1];
   }, [chartData, removeOutliers]);
 
-  const recentFirstLaps = useMemo(() => (laps ? [...laps].reverse() : []), [laps]);
+  // Global (career-wide, chronological) lap number rather than each lap's
+  // in-heat lapNo (which resets to 1 every heat) - matches the numbering
+  // the chart's "Lap # (chronological)" axis uses. `laps` arrives oldest
+  // first, so position + 1 is a stable running count across every heat.
+  const recentFirstLaps = useMemo(
+    () => (laps ? laps.map((l, i) => ({ ...l, globalLapNo: i + 1 })).reverse() : []),
+    [laps],
+  );
 
   if (driver === undefined || laps === undefined) return <p className="text-neutral-500">Loading…</p>;
   if (driver === null) return <p className="text-neutral-500">Driver not found.</p>;
@@ -291,7 +298,7 @@ export default function DriverAnalyticsPage() {
             <tbody>
               {recentFirstLaps.map((l, i) => (
                 <tr key={i} className="border-t border-neutral-100 dark:border-neutral-800">
-                  <td className="px-3 py-2 tabular-nums">{l.lapNo}</td>
+                  <td className="px-3 py-2 tabular-nums">{l.globalLapNo}</td>
                   <td className="px-3 py-2">
                     <Link to={`/heats/${l.heatNo}`} className="text-blue-600 hover:underline dark:text-blue-400">
                       #{l.heatNo}
